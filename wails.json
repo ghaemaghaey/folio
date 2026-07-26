@@ -1,0 +1,20 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "folio",
+  "outputfilename": "folio",
+  "frontend:install": "",
+  "frontend:build": "",
+  "frontend:dev:watcher": "",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "Folio Contributors",
+    "email": ""
+  },
+  "info": {
+    "companyName": "Folio",
+    "productName": "Folio",
+    "productVersion": "0.1.0",
+    "copyright": "Copyright © Folio Contributors",
+    "comments": "A calm, beautiful desktop reading app"
+  }
+}

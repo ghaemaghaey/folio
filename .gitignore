@@ -1,0 +1,27 @@
+# Binaries
+build/bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go
+vendor/
+*.test
+*.out
+go.work
+go.work.sum
+
+# Wails / IDE
+frontend/wailsjs/
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Local
+*.log
+.tmp/
+.cache/
