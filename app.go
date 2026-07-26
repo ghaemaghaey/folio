@@ -76,6 +76,13 @@ func (a *App) startup(ctx context.Context) {
 	// Do not block the first paint: library + PDFium load lazily on demand.
 	// Kick library open in the background so the shelf is ready moments later.
 	go a.ensureLibrary()
+	// Warm PDFium WASM in the background so the first PDF open is much faster.
+	// This is the main "first run is slow" cost (WASM compile + pool start).
+	go func() {
+		if err := a.ensureRenderer(); err != nil {
+			runtime.LogWarningf(ctx, "pdfium warm-up: %v", err)
+		}
+	}()
 }
 
 func (a *App) ensureLibrary() {
@@ -139,7 +146,7 @@ func (a *App) shutdown(ctx context.Context) {
 
 // AppVersion returns the app version string.
 func (a *App) AppVersion() string {
-	return "0.6.0"
+	return "0.6.1"
 }
 
 // OpenExternalURL opens http(s)/mailto links in the OS default browser.

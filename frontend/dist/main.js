@@ -59,6 +59,10 @@ const state = {
   globalPageTotal: 0,
   chromeHideTimer: null,
   pan: { active: false, el: null, x: 0, y: 0, sl: 0, st: 0, moved: false },
+  // While true, do not persist progress (avoids saving a wrong interim position).
+  restoring: false,
+  // Content-stable EPUB anchor (0–1 through full document height).
+  epubScrollRatio: 0,
 };
 
 function hasWails() {
@@ -405,6 +409,8 @@ async function flushProgress() {
     clearTimeout(state.progressTimer);
     state.progressTimer = null;
   }
+  // Never persist while layout/position is still settling after open/resize.
+  if (state.restoring) return;
   if (!hasWails() || !state.doc) return;
   const id = state.doc.id;
   if (!id) {
@@ -418,13 +424,18 @@ async function flushProgress() {
     let scroll = 0;
     if (state.doc.format === "epub") {
       updateEpubPositionFromScroll();
+      // page is only a display/hint metric (viewport-height units); true anchor is scroll.
       page = state.globalPage | 0;
       chapter = state.epubChapterIndex | 0;
       sub = state.epubPage | 0;
       scroll = currentScrollRatio() || 0;
+      state.epubScrollRatio = scroll;
     } else {
+      // PDF page numbers are document-native and stable across window sizes.
       page = Math.max(0, state.doc.pageIndex | 0);
-      scroll = currentScrollRatio() || 0;
+      // Only record scroll ratio in continuous mode as a soft hint, not the restore key.
+      scroll =
+        state.mode === "scroll" ? currentScrollRatio() || 0 : 0;
     }
     // Prefer explicit book id so progress never depends on openDoc races
     if (typeof api().SaveBookProgress === "function") {
@@ -459,7 +470,13 @@ function updateChromeMeta() {
   syncGuideWidth();
 }
 
-/** Map continuous EPUB scroll → virtual page + chapter (like a long PDF). */
+/**
+ * Map continuous EPUB scroll → virtual page + chapter for the chrome only.
+ *
+ * IMPORTANT: "pages" here are viewport-height slices (screen-size dependent).
+ * They must NEVER be the sole restore key — use scroll ratio / chapter for that.
+ * Same reading spot → different page numbers when the window is resized.
+ */
 function updateEpubPositionFromScroll() {
   const v = el.epubBook;
   if (!v || !state.doc) return;
@@ -472,6 +489,7 @@ function updateEpubPositionFromScroll() {
   );
   state.epubPage = state.globalPage;
   state.epubPageCount = state.globalPageTotal;
+  state.epubScrollRatio = currentScrollRatio() || 0;
 
   // Visible chapter from section tops
   const sections = el.epubContent?.querySelectorAll(".epub-chapter") || [];
@@ -658,6 +676,7 @@ async function enterDocument(doc) {
   const pageIndex = doc.pageIndex ?? doc.PageIndex ?? 0;
 
   state.rendering = false; // never block a new open because a prior load stuck
+  state.restoring = true; // block progress writes until we land on the saved spot
   state.doc = {
     id: doc.id || doc.ID || "",
     path: doc.path || doc.Path || "",
@@ -675,6 +694,7 @@ async function enterDocument(doc) {
   state.chapterPageCounts = {};
   state.globalPage = pageIndex;
   state.globalPageTotal = Math.max(1, pageCount);
+  state.epubScrollRatio = state.doc.lastScroll || 0;
 
   state.epubChapterIndex = state.doc.lastChapter || 0;
   state.epubPage = state.doc.lastSubPage || 0;
@@ -688,6 +708,7 @@ async function enterDocument(doc) {
     if (format === "epub") {
       await loadTOC();
       await loadEpubContinuous({
+        // Content-stable anchor (0–1). Page numbers are NOT used for restore.
         restoreScroll: state.doc.lastScroll || 0,
         restoreChapter: state.epubChapterIndex,
       });
@@ -697,12 +718,10 @@ async function enterDocument(doc) {
       if (state.mode === "scroll") {
         el.pageViewport?.classList.add("is-hidden");
         el.scrollViewport?.classList.remove("is-hidden");
+        // Restore ONLY by real PDF page index. Global scroll ratios jump when
+        // window size / zoom / unloaded placeholders change total scrollHeight.
         await reloadScroll(true);
-        const slot = el.scrollViewport.querySelector(
-          `[data-page="${state.doc.pageIndex}"]`
-        );
-        slot?.scrollIntoView({ block: "start", behavior: "auto" });
-        if (state.doc.lastScroll > 0.02) restoreScroll(state.doc.lastScroll);
+        await scrollPdfToPage(state.doc.pageIndex, { smooth: false });
       } else {
         el.scrollViewport?.classList.add("is-hidden");
         el.pageViewport?.classList.remove("is-hidden");
@@ -713,9 +732,43 @@ async function enterDocument(doc) {
   } catch (err) {
     console.error("enterDocument failed", err);
     toast(String(err?.message || err || "Could not open document"), true);
+  } finally {
+    state.restoring = false;
   }
   updateChromeMeta();
   syncGuideWidth();
+  // One clean save after restore settled (open-time flushes were blocked).
+  scheduleProgress();
+}
+
+/** Scroll continuous PDF view to a document page (stable across window sizes). */
+async function scrollPdfToPage(pageIndex, { smooth = false } = {}) {
+  const vp = el.scrollViewport;
+  if (!vp || !state.doc) return;
+  const target = Math.max(
+    0,
+    Math.min(state.doc.pageCount - 1, pageIndex | 0)
+  );
+  state.doc.pageIndex = target;
+  // Ensure target (and neighbors) are measured with real image heights when possible.
+  await ensureScrollPage(target);
+  ensureScrollPage(target + 1);
+  ensureScrollPage(target - 1);
+
+  const apply = () => {
+    const slot = vp.querySelector(`[data-page="${target}"]`);
+    if (!slot) return;
+    slot.scrollIntoView({
+      block: "start",
+      behavior: smooth ? "smooth" : "auto",
+    });
+  };
+  apply();
+  // Second pass after layout/images settle so we don't stick on placeholder heights.
+  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+  apply();
+  await new Promise((r) => setTimeout(r, 50));
+  apply();
 }
 
 function setupViewports() {
@@ -768,16 +821,64 @@ function currentScrollRatio() {
   return 0;
 }
 
-function restoreScroll(ratio) {
-  if (ratio == null || ratio <= 0) return;
+/**
+ * Restore vertical position by fraction of max scroll (content-stable when
+ * total height proportions are stable). Re-apply several times as images/fonts
+ * load so we do not freeze on a pre-layout height.
+ */
+function restoreScroll(ratio, { times = 4, gapMs = 120 } = {}) {
+  if (ratio == null || ratio < 0) return Promise.resolve();
+  const clamped = Math.min(1, Math.max(0, ratio));
+  if (clamped === 0) return Promise.resolve();
+
   const apply = () => {
     const v =
       state.doc?.format === "epub" ? el.epubBook : el.scrollViewport;
-    if (!v) return;
+    if (!v) return false;
     const max = v.scrollHeight - v.clientHeight;
-    if (max > 0) v.scrollTop = max * Math.min(1, Math.max(0, ratio));
+    if (max <= 0) return false;
+    v.scrollTop = max * clamped;
+    return true;
   };
-  requestAnimationFrame(() => requestAnimationFrame(apply));
+
+  return new Promise((resolve) => {
+    let n = 0;
+    const tick = () => {
+      apply();
+      n += 1;
+      if (n >= times) {
+        resolve();
+        return;
+      }
+      setTimeout(() => requestAnimationFrame(tick), gapMs);
+    };
+    requestAnimationFrame(() => requestAnimationFrame(tick));
+  });
+}
+
+/**
+ * Keep the same content position when the EPUB viewport is resized.
+ * Virtual page numbers will change; the text under the eye should not jump.
+ */
+function preserveEpubContentOnResize() {
+  if (state.doc?.format !== "epub" || !el.epubBook) return;
+  const ratio =
+    state.epubScrollRatio || currentScrollRatio() || 0;
+  if (ratio <= 0) {
+    updateEpubPositionFromScroll();
+    updateChromeMeta();
+    return;
+  }
+  state.restoring = true;
+  const v = el.epubBook;
+  const max = v.scrollHeight - v.clientHeight;
+  if (max > 0) v.scrollTop = max * Math.min(1, Math.max(0, ratio));
+  updateEpubPositionFromScroll();
+  updateChromeMeta();
+  // Release after a frame so scroll handlers don't overwrite saved progress.
+  requestAnimationFrame(() => {
+    state.restoring = false;
+  });
 }
 
 // ─── PDF (cached + prefetch) ─────────────────────────────────
@@ -1002,9 +1103,8 @@ function onScrollViewport() {
       ensureScrollPage(parseInt(slot.dataset.page, 10));
     }
   }
-  // During zoom, keep the same page — scroll geometry changes briefly
-  if (state.zoomLockPage) {
-    scheduleProgress();
+  // During zoom / open restore, keep the same page — geometry is in flux.
+  if (state.zoomLockPage || state.restoring) {
     return;
   }
   let best = state.doc?.pageIndex || 0;
@@ -1142,22 +1242,52 @@ async function loadEpubContinuous(opts = {}) {
 
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
 
-    if (opts.restoreScroll > 0) {
-      restoreScroll(opts.restoreScroll);
-    } else if (typeof opts.restoreChapter === "number" && opts.restoreChapter > 0) {
-      jumpToEpubChapter(opts.restoreChapter, false);
-    } else {
-      el.epubBook.scrollTop = 0;
-    }
+    // Restore by content fraction (scroll), never by virtual page index.
+    // Virtual pages = viewport heights and shift when the window is not fullscreen.
+    state.restoring = true;
+    try {
+      if (opts.restoreScroll > 0) {
+        state.epubScrollRatio = opts.restoreScroll;
+        await restoreScroll(opts.restoreScroll, { times: 6, gapMs: 100 });
+      } else if (typeof opts.restoreChapter === "number" && opts.restoreChapter > 0) {
+        jumpToEpubChapter(opts.restoreChapter, false);
+      } else {
+        el.epubBook.scrollTop = 0;
+      }
 
-    updateEpubPositionFromScroll();
-    updateChromeMeta();
+      // Re-pin after late images (common cause of “opened a few pages off”).
+      const imgs = el.epubContent?.querySelectorAll("img") || [];
+      if (imgs.length && opts.restoreScroll > 0) {
+        await Promise.race([
+          Promise.all(
+            [...imgs].map(
+              (img) =>
+                img.complete
+                  ? Promise.resolve()
+                  : new Promise((res) => {
+                      img.addEventListener("load", res, { once: true });
+                      img.addEventListener("error", res, { once: true });
+                    })
+            )
+          ),
+          new Promise((r) => setTimeout(r, 1500)),
+        ]);
+        await restoreScroll(opts.restoreScroll, { times: 3, gapMs: 80 });
+      }
+
+      updateEpubPositionFromScroll();
+      updateChromeMeta();
+    } finally {
+      state.restoring = false;
+    }
+    // Persist only after we know we are on the intended content.
     scheduleProgress();
   } catch (err) {
     console.error("EPUB load failed", err);
     const msg = String(err?.message || err || "Failed to load EPUB");
     el.epubContent.innerHTML = `<p class="epub-loading is-error">${escapeHtml(msg)}</p>`;
     toast(msg, true);
+    state.restoring = false;
   } finally {
     state.rendering = false;
   }
@@ -1249,6 +1379,7 @@ function jumpToEpubChapter(index, save = true) {
 
 function onEpubScroll() {
   if (!state.doc || state.doc.format !== "epub") return;
+  if (state.restoring) return;
   updateEpubPositionFromScroll();
   updateChromeMeta();
   scheduleProgress();
@@ -1900,12 +2031,28 @@ function bindEvents() {
 
   // EPUB continuous scroll handler is set in loadEpubContinuous (onEpubScroll)
 
+  let resizeTimer = null;
   window.addEventListener("resize", () => {
-    if (state.doc?.format === "epub") {
-      updateEpubPositionFromScroll();
-      updateChromeMeta();
-    }
-    syncGuideWidth();
+    // Debounce: keep the same *content* under the eye when the window size
+    // changes. Virtual page numbers will update; the text must not jump.
+    if (resizeTimer) clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      if (state.doc?.format === "epub") {
+        preserveEpubContentOnResize();
+      } else if (state.doc?.format === "pdf") {
+        applyPdfVisualZoom();
+        // Page mode is already page-index based (stable). Scroll mode: re-pin.
+        if (state.mode === "scroll" && state.doc.pageIndex != null) {
+          const stay = state.doc.pageIndex;
+          state.restoring = true;
+          scrollPdfToPage(stay, { smooth: false }).finally(() => {
+            state.restoring = false;
+            updateChromeMeta();
+          });
+        }
+      }
+      syncGuideWidth();
+    }, 80);
   });
 
   window.addEventListener("keydown", (e) => {
