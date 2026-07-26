@@ -1,0 +1,1195 @@
+/* ─── Reset & base ─────────────────────────────────────────── */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--font-ui);
+  font-size: var(--text-base);
+  font-weight: var(--weight-regular);
+  line-height: var(--leading-normal);
+  color: var(--ink);
+  background: var(--bg-app);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  transition: background-color var(--dur-med) var(--ease-soft),
+    color var(--dur-med) var(--ease-soft);
+  user-select: none;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.is-hidden {
+  display: none !important;
+}
+
+/* ─── App shell ────────────────────────────────────────────── */
+
+#app {
+  height: 100%;
+  position: relative;
+}
+
+.view {
+  height: 100%;
+  width: 100%;
+}
+
+/* ─── Buttons ──────────────────────────────────────────────── */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: 0.55rem 1rem;
+  border-radius: var(--radius-pill);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.01em;
+  transition: background var(--dur-fast) var(--ease-soft),
+    color var(--dur-fast) var(--ease-soft),
+    box-shadow var(--dur-fast) var(--ease-soft),
+    transform var(--dur-fast) var(--ease-soft);
+}
+
+.btn .icon {
+  width: 1.125rem;
+  height: 1.125rem;
+  flex-shrink: 0;
+}
+
+.btn--primary {
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+.btn--primary:hover {
+  background: var(--accent-hover);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+
+.btn--primary:active {
+  transform: translateY(0);
+}
+
+[data-theme="dark"] .btn--primary {
+  color: #1a140c;
+}
+
+.btn--ghost {
+  background: transparent;
+  color: var(--ink-secondary);
+  border: 1px solid var(--border-strong);
+}
+
+.btn--ghost:hover {
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+.btn--lg {
+  padding: 0.75rem 1.35rem;
+  font-size: var(--text-base);
+}
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: var(--radius-pill);
+  color: var(--ink-secondary);
+  transition: background var(--dur-fast) var(--ease-soft),
+    color var(--dur-fast) var(--ease-soft);
+}
+
+.icon-btn:hover {
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+.icon-btn .icon {
+  width: 1.35rem;
+  height: 1.35rem;
+}
+
+/* ─── Library view ─────────────────────────────────────────── */
+
+.view--library {
+  display: flex;
+  flex-direction: column;
+  background:
+    radial-gradient(ellipse 80% 50% at 50% -10%, var(--accent-soft), transparent 55%),
+    var(--bg-app);
+}
+
+.lib-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-5) var(--space-6);
+  flex-shrink: 0;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.brand-mark {
+  color: var(--accent);
+  display: flex;
+}
+
+.brand-name {
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+  letter-spacing: -0.02em;
+  line-height: var(--leading-tight);
+  color: var(--ink);
+}
+
+.brand-tagline {
+  font-size: var(--text-xs);
+  color: var(--ink-muted);
+  margin-top: 0.1rem;
+  letter-spacing: 0.02em;
+}
+
+.lib-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.lib-main {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4) var(--space-6) var(--space-6);
+  overflow: auto;
+}
+
+.welcome-card {
+  max-width: 28rem;
+  text-align: center;
+  padding: var(--space-7) var(--space-6);
+  background: var(--surface-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  animation: fade-rise var(--dur-slow) var(--ease-out) both;
+}
+
+@keyframes fade-rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Decorative book stack */
+.welcome-art {
+  display: flex;
+  justify-content: center;
+  margin-bottom: var(--space-6);
+}
+
+.page-stack {
+  position: relative;
+  width: 5.5rem;
+  height: 7rem;
+}
+
+.page {
+  position: absolute;
+  inset: 0;
+  border-radius: 3px 8px 8px 3px;
+  background: var(--page-bg);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-sm);
+}
+
+.page--back {
+  transform: translate(10px, 6px) rotate(4deg);
+  opacity: 0.55;
+  background: var(--bg-muted);
+}
+
+.page--mid {
+  transform: translate(5px, 3px) rotate(1.5deg);
+  opacity: 0.8;
+}
+
+.page--front {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(160deg, var(--surface-elevated), var(--bg-muted));
+}
+
+.page-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  width: 55%;
+}
+
+.page-lines span {
+  display: block;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--ink-muted);
+  opacity: 0.35;
+}
+
+.page-lines span:nth-child(2) {
+  width: 90%;
+}
+.page-lines span:nth-child(3) {
+  width: 75%;
+}
+.page-lines span:nth-child(4) {
+  width: 85%;
+}
+
+.welcome-title {
+  font-family: var(--font-display);
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-semibold);
+  letter-spacing: -0.025em;
+  line-height: var(--leading-tight);
+  color: var(--ink);
+  margin-bottom: var(--space-3);
+}
+
+.welcome-body {
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  color: var(--ink-secondary);
+  margin-bottom: var(--space-5);
+}
+
+.welcome-hint {
+  margin-top: var(--space-4);
+  font-size: var(--text-xs);
+  color: var(--ink-muted);
+}
+
+.lib-footer {
+  padding: var(--space-3) var(--space-6) var(--space-4);
+  text-align: center;
+  font-size: var(--text-xs);
+  color: var(--ink-muted);
+  letter-spacing: 0.04em;
+}
+
+/* ─── Reader view ──────────────────────────────────────────── */
+
+.view--reader {
+  position: relative;
+  background: var(--bg-muted);
+  overflow: hidden;
+}
+
+/* Distraction-free: chrome floats and fades */
+.reader-chrome {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-chrome);
+  backdrop-filter: blur(14px) saturate(1.2);
+  -webkit-backdrop-filter: blur(14px) saturate(1.2);
+  border-color: var(--border);
+  transition: opacity var(--dur-med) var(--ease-soft),
+    transform var(--dur-med) var(--ease-out);
+}
+
+.reader-chrome--top {
+  top: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.reader-chrome--bottom {
+  bottom: 0;
+  justify-content: center;
+  border-top: 1px solid var(--border);
+  padding-bottom: max(var(--space-3), env(safe-area-inset-bottom));
+}
+
+/* Hidden chrome (default while reading) */
+.view--reader[data-chrome="hidden"] .reader-chrome {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.view--reader[data-chrome="hidden"] .reader-chrome--top {
+  transform: translateY(-8px);
+}
+
+.view--reader[data-chrome="hidden"] .reader-chrome--bottom {
+  transform: translateY(8px);
+}
+
+.view--reader[data-chrome="visible"] .reader-chrome {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.reader-title-block {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+}
+
+.reader-title {
+  font-family: var(--font-display);
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--ink);
+}
+
+.reader-meta {
+  font-size: var(--text-xs);
+  color: var(--ink-muted);
+  margin-top: 0.1rem;
+}
+
+.reader-top-actions {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.page-indicator {
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-secondary);
+  font-weight: var(--weight-medium);
+  min-width: 5rem;
+  text-align: center;
+}
+
+.page-scrub {
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-4);
+}
+
+/* Stage */
+.reader-stage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  outline: none;
+  cursor: default;
+}
+
+.page-viewport {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6);
+  overflow: auto;
+}
+
+.page-frame {
+  position: relative;
+  /* size is set by JS from zoom; no max caps that fight zoom */
+  background: var(--page-bg);
+  border-radius: 2px;
+  box-shadow: var(--page-shadow);
+  transition: opacity var(--dur-med) var(--ease-soft),
+    box-shadow var(--dur-med) var(--ease-soft);
+  flex-shrink: 0;
+  line-height: 0;
+}
+
+.page-frame.is-turning-out {
+  opacity: 0;
+}
+
+.page-frame.is-turning-in {
+  animation: page-in var(--dur-med) var(--ease-out) both;
+}
+
+@keyframes page-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+#page-image {
+  /* width set by applyPdfVisualZoom — pure CSS scale of the bitmap */
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: none;
+  max-height: none;
+  border-radius: 2px;
+  background: var(--page-bg);
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.page-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  background: var(--page-bg);
+  color: var(--ink-muted);
+  font-size: var(--text-sm);
+  border-radius: 2px;
+}
+
+.page-loading[hidden] {
+  display: none;
+}
+
+.spinner {
+  width: 1.5rem;
+  height: 1.5rem;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Invisible edge zones for page navigation */
+.edge-nav {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 18%;
+  max-width: 140px;
+  z-index: 10;
+  background: transparent;
+  cursor: pointer;
+}
+
+.edge-nav--prev {
+  left: 0;
+}
+
+.edge-nav--next {
+  right: 0;
+}
+
+/* Soft hover hint on edges when chrome is hidden */
+.view--reader[data-chrome="hidden"] .edge-nav--prev:hover {
+  background: linear-gradient(90deg, var(--accent-soft), transparent);
+}
+
+.view--reader[data-chrome="hidden"] .edge-nav--next:hover {
+  background: linear-gradient(270deg, var(--accent-soft), transparent);
+}
+
+/* Toast */
+.toast {
+  position: absolute;
+  bottom: var(--space-7);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 40;
+  padding: 0.6rem 1.1rem;
+  border-radius: var(--radius-pill);
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-md);
+  font-size: var(--text-sm);
+  color: var(--ink);
+  animation: fade-rise var(--dur-med) var(--ease-out) both;
+}
+
+.toast[hidden] {
+  display: none;
+}
+
+.toast.is-error {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 30%, var(--border));
+}
+
+/* ─── Responsive tweaks ────────────────────────────────────── */
+
+@media (max-width: 640px) {
+  .lib-header {
+    padding: var(--space-4);
+    flex-wrap: wrap;
+    gap: var(--space-3);
+  }
+
+  .welcome-card {
+    padding: var(--space-5) var(--space-4);
+  }
+
+  .btn-label {
+    /* keep labels on primary */
+  }
+
+  .page-viewport {
+    padding: var(--space-3);
+  }
+}
+
+/* --- Shelf -------------------------------------------------- */
+
+.shelf {
+  width: min(100%, 72rem);
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
+  gap: var(--space-5);
+  padding: var(--space-2) var(--space-2) var(--space-6);
+  align-content: start;
+}
+
+.shelf.is-hidden { display: none; }
+
+.shelf-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  text-align: start;
+  border-radius: var(--radius-md);
+  padding: var(--space-2);
+  background: transparent;
+  transition: background var(--dur-fast) var(--ease-soft), transform var(--dur-fast) var(--ease-soft);
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.shelf-card:hover {
+  background: var(--surface-elevated);
+  border-color: var(--border);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-sm);
+}
+
+.shelf-card.is-bad {
+  cursor: default;
+  opacity: 0.72;
+  filter: grayscale(0.85);
+}
+
+.shelf-card.is-bad:hover {
+  transform: none;
+}
+
+.shelf-cover {
+  aspect-ratio: 2 / 3;
+  border-radius: 4px;
+  background: linear-gradient(160deg, var(--bg-muted), var(--surface));
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+.shelf-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.shelf-cover-fallback {
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  color: var(--ink-muted);
+  padding: var(--space-3);
+  text-align: center;
+  line-height: 1.25;
+}
+
+.shelf-badge {
+  position: absolute;
+  top: var(--space-2);
+  left: var(--space-2);
+  font-size: 0.65rem;
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.15rem 0.45rem;
+  border-radius: var(--radius-pill);
+  background: var(--surface-elevated);
+  color: var(--ink-secondary);
+  border: 1px solid var(--border);
+}
+
+.shelf-badge.is-warn {
+  background: color-mix(in srgb, var(--danger) 18%, var(--surface-elevated));
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 30%, var(--border));
+}
+
+.shelf-title {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--ink);
+  line-height: var(--leading-snug);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.shelf-card.is-bad .shelf-title {
+  color: var(--ink-muted);
+}
+
+.shelf-meta {
+  font-size: var(--text-xs);
+  color: var(--ink-muted);
+}
+
+.shelf-actions {
+  display: flex;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+}
+
+.shelf-actions .btn {
+  flex: 1;
+  padding: 0.4rem 0.5rem;
+  font-size: var(--text-xs);
+}
+
+.lib-main.has-shelf {
+  align-items: stretch;
+  justify-content: flex-start;
+  flex-direction: column;
+}
+
+.lib-main.has-shelf .welcome-card {
+  display: none;
+}
+
+/* --- Zoom label --------------------------------------------- */
+
+.zoom-label {
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-muted);
+  min-width: 2.75rem;
+  text-align: center;
+}
+
+/* --- Font panel --------------------------------------------- */
+
+.font-panel {
+  position: absolute;
+  top: 3.75rem;
+  right: var(--space-4);
+  z-index: 30;
+  width: min(22rem, calc(100vw - 2rem));
+  padding: var(--space-4);
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  backdrop-filter: blur(12px);
+}
+
+.font-panel.is-hidden { display: none; }
+
+.font-panel-title {
+  font-family: var(--font-display);
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  margin-bottom: var(--space-3);
+}
+
+.font-group + .font-group {
+  margin-top: var(--space-4);
+}
+
+.font-group-label {
+  font-size: var(--text-xs);
+  color: var(--ink-muted);
+  letter-spacing: 0.03em;
+  margin-bottom: var(--space-2);
+}
+
+.font-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.font-chip {
+  padding: 0.4rem 0.7rem;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-strong);
+  font-size: var(--text-xs);
+  color: var(--ink-secondary);
+  background: var(--surface);
+  transition: background var(--dur-fast), color var(--dur-fast), border-color var(--dur-fast);
+}
+
+.font-chip:hover {
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+.font-chip.is-active {
+  background: var(--accent);
+  border-color: transparent;
+  color: #fff;
+}
+
+[data-theme="dark"] .font-chip.is-active {
+  color: #1a140c;
+}
+
+/* --- Scroll mode -------------------------------------------- */
+
+.scroll-viewport {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  padding: var(--space-6) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-5);
+  scroll-behavior: smooth;
+}
+
+.scroll-viewport.is-hidden { display: none; }
+
+.scroll-page {
+  /* width controlled by applyPdfVisualZoom */
+  background: var(--page-bg);
+  box-shadow: var(--page-shadow);
+  border-radius: 2px;
+  line-height: 0;
+  flex-shrink: 0;
+}
+
+.scroll-page img {
+  width: 100%;
+  height: auto;
+  max-width: none;
+  display: block;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.scroll-page-slot {
+  min-height: 40vh;
+  width: min(100%, 920px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--page-bg);
+  box-shadow: var(--page-shadow);
+  color: var(--ink-muted);
+  font-size: var(--text-sm);
+  flex-shrink: 0;
+}
+
+/* --- EPUB --------------------------------------------------- */
+
+.epub-viewport {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  padding: var(--space-7) var(--space-5);
+  scroll-behavior: smooth;
+}
+
+.epub-viewport.is-hidden { display: none; }
+
+.epub-content {
+  max-width: var(--reading-measure);
+  margin: 0 auto;
+  font-family: var(--font-reading);
+  font-size: calc(var(--reading-size) * var(--zoom-scale, 1));
+  line-height: var(--reading-line);
+  color: var(--ink);
+  user-select: text;
+}
+
+.epub-content p {
+  margin: 0 0 0.9em;
+}
+
+.epub-content h1,
+.epub-content h2,
+.epub-content h3 {
+  font-family: var(--font-reading);
+  font-weight: 600;
+  line-height: 1.3;
+  margin: 1.4em 0 0.6em;
+}
+
+.epub-content img {
+  max-width: 100%;
+  height: auto;
+  margin: 1em auto;
+}
+
+.epub-content a {
+  color: var(--accent);
+}
+
+/* RTL-friendly when Persian fonts selected */
+html[data-font="vazirmatn"] .epub-content,
+html[data-font="samim"] .epub-content,
+html[data-font="shabnam"] .epub-content,
+html[data-font="sahel"] .epub-content,
+html[data-font="tanha"] .epub-content,
+html[data-font="parastoo"] .epub-content,
+html[data-font="gandom"] .epub-content {
+  direction: rtl;
+  text-align: right;
+}
+
+.page-viewport.is-hidden { display: none; }
+
+.view--reader[data-mode="scroll"] .edge-nav {
+  display: none;
+}
+
+/* --- Chrome hotspots (reveal only near edges) --------------- */
+
+.chrome-hotspot {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 25;
+  height: 18px;
+  pointer-events: auto;
+}
+
+.chrome-hotspot--top { top: 0; }
+.chrome-hotspot--bottom { bottom: 0; }
+
+/* Keep chrome non-interactive when hidden so scroll works under it */
+.view--reader[data-chrome="hidden"] .reader-chrome {
+  pointer-events: none;
+}
+
+/* --- TOC panel ---------------------------------------------- */
+
+.toc-panel {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: min(20rem, 88vw);
+  z-index: 35;
+  background: var(--surface-chrome);
+  backdrop-filter: blur(16px);
+  border-right: 1px solid var(--border);
+  box-shadow: var(--shadow-md);
+  display: flex;
+  flex-direction: column;
+  animation: fade-rise var(--dur-med) var(--ease-out) both;
+}
+
+.toc-panel.is-hidden { display: none; }
+
+.toc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3) var(--space-3) var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.toc-header h3 {
+  font-family: var(--font-display);
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+}
+
+.toc-list {
+  list-style: none;
+  overflow: auto;
+  padding: var(--space-2);
+  flex: 1;
+}
+
+.toc-list li button {
+  width: 100%;
+  text-align: start;
+  padding: 0.65rem 0.75rem;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  color: var(--ink-secondary);
+  line-height: 1.35;
+  transition: background var(--dur-fast);
+}
+
+.toc-list li button:hover {
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+.toc-list li button.is-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: var(--weight-medium);
+}
+
+/* --- EPUB paginated book ------------------------------------ */
+
+.epub-viewport {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  padding: var(--space-4);
+}
+
+.epub-viewport.is-hidden { display: none; }
+
+.epub-book {
+  width: min(100%, calc(var(--reading-measure) * var(--zoom-scale, 1) + 2rem));
+  max-width: 100%;
+  height: 100%;
+  background: var(--page-bg);
+  box-shadow: var(--page-shadow);
+  border-radius: 2px;
+  overflow: hidden;
+  position: relative;
+}
+
+.epub-pages {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  position: relative;
+}
+
+/* Page mode: CSS multi-column pagination */
+.epub-viewport[data-mode="page"] .epub-pages {
+  overflow: hidden;
+}
+
+.epub-viewport[data-mode="page"] .epub-content {
+  height: 100%;
+  width: 100%;
+  padding: var(--space-5);
+  box-sizing: border-box;
+  column-gap: 0;
+  column-fill: auto;
+  overflow: visible;
+  margin: 0;
+  max-width: none;
+  will-change: transform;
+}
+
+/* Scroll mode: continuous vertical reading */
+.epub-viewport[data-mode="scroll"] .epub-book {
+  overflow: auto;
+  box-shadow: var(--page-shadow);
+}
+
+.epub-viewport[data-mode="scroll"] .epub-pages {
+  overflow: visible;
+  height: auto;
+  min-height: 100%;
+}
+
+.epub-viewport[data-mode="scroll"] .epub-content {
+  height: auto;
+  max-width: none;
+  padding: var(--space-6) var(--space-5);
+  column-width: auto;
+  columns: auto;
+}
+
+.epub-content img {
+  cursor: zoom-in;
+  border-radius: 2px;
+}
+
+.epub-content a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+/* --- Reading guide (viewport-fixed) ------------------------- */
+
+.reading-guide {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(920px, calc(100vw - 2rem));
+  height: var(--guide-height, 48px);
+  top: var(--guide-top, 40%);
+  z-index: 22;
+  pointer-events: none;
+  border-radius: 4px;
+  background: hsl(var(--guide-hue, 48) 70% 55% / var(--guide-opacity, 0.28));
+  box-shadow: inset 0 0 0 1px hsl(var(--guide-hue, 48) 60% 40% / 0.35);
+  transition: background 80ms linear, height 80ms linear;
+}
+
+.reading-guide.is-hidden { display: none; }
+
+.reading-guide.is-unlocked {
+  pointer-events: auto;
+  cursor: ns-resize;
+}
+
+.guide-panel {
+  position: absolute;
+  top: 3.75rem;
+  right: var(--space-4);
+  z-index: 36;
+  width: min(18rem, calc(100vw - 2rem));
+  padding: var(--space-4);
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+}
+
+.guide-panel.is-hidden { display: none; }
+
+.guide-field {
+  display: grid;
+  grid-template-columns: 4.5rem 1fr;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--ink-secondary);
+}
+
+.guide-field input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.guide-check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--ink-secondary);
+  margin-bottom: var(--space-2);
+}
+
+.guide-hint {
+  font-size: var(--text-xs);
+  color: var(--ink-muted);
+  line-height: 1.4;
+}
+
+.icon-btn.is-on {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* --- Lightbox ----------------------------------------------- */
+
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(12, 12, 14, 0.82);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6);
+  cursor: zoom-out;
+}
+
+.lightbox.is-hidden { display: none; }
+
+.lightbox img {
+  max-width: min(96vw, 1200px);
+  max-height: 92vh;
+  object-fit: contain;
+  border-radius: 4px;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.45);
+  cursor: default;
+}
+
+.lightbox-close {
+  position: absolute;
+  top: var(--space-4);
+  right: var(--space-4);
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-size: 1.5rem;
+  line-height: 1;
+}

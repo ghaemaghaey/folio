@@ -1,0 +1,163 @@
+/**
+ * Folio design tokens
+ * One spacing scale, one type ramp, three carefully tuned reading themes.
+ * Inspired by ReadEra / Thorium: paper-like surfaces, quiet chrome, typography first.
+ */
+
+:root {
+  /* Spacing scale (4px base) */
+  --space-1: 0.25rem;  /* 4 */
+  --space-2: 0.5rem;   /* 8 */
+  --space-3: 0.75rem;  /* 12 */
+  --space-4: 1rem;     /* 16 */
+  --space-5: 1.5rem;   /* 24 */
+  --space-6: 2rem;     /* 32 */
+  --space-7: 3rem;     /* 48 */
+  --space-8: 4rem;     /* 64 */
+
+  /* Radii */
+  --radius-sm: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1.25rem;
+  --radius-pill: 999px;
+
+  /* Type — Inter/Fraunces when available; strong OS stacks as fallback (native feel) */
+  --font-ui: "Inter", "Segoe UI", system-ui, -apple-system, "Ubuntu", "Cantarell", sans-serif;
+  --font-display: "Fraunces", "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif;
+  --font-reading: "Literata", "Source Serif 4", Georgia, serif;
+  --reading-size: 1.125rem;
+  --reading-line: 1.75;
+  --reading-measure: 40rem;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.375rem;
+  --text-2xl: 1.75rem;
+  --text-3xl: 2.25rem;
+
+  --leading-tight: 1.25;
+  --leading-snug: 1.4;
+  --leading-normal: 1.55;
+  --leading-relaxed: 1.7;
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+
+  /* Motion */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-soft: cubic-bezier(0.4, 0, 0.2, 1);
+  --dur-fast: 140ms;
+  --dur-med: 240ms;
+  --dur-slow: 420ms;
+
+  /* Elevation */
+  --shadow-sm: 0 1px 2px rgba(28, 22, 14, 0.05), 0 1px 3px rgba(28, 22, 14, 0.04);
+  --shadow-md: 0 4px 16px rgba(28, 22, 14, 0.08), 0 1px 3px rgba(28, 22, 14, 0.05);
+  --shadow-page: 0 8px 40px rgba(28, 22, 14, 0.12), 0 2px 8px rgba(28, 22, 14, 0.06);
+
+  /* Default = sepia (warm paper) — overridden by [data-theme] */
+  --bg-app: #f5f1e8;
+  --bg-muted: #ebe4d6;
+  --surface: #faf7f0;
+  --surface-elevated: #fffcf6;
+  --surface-chrome: rgba(250, 247, 240, 0.88);
+  --ink: #2c2416;
+  --ink-secondary: #5c5346;
+  --ink-muted: #8a8070;
+  --accent: #8b5e34;
+  --accent-hover: #734c28;
+  --accent-soft: rgba(139, 94, 52, 0.12);
+  --border: rgba(44, 36, 22, 0.08);
+  --border-strong: rgba(44, 36, 22, 0.14);
+  --focus-ring: rgba(139, 94, 52, 0.45);
+  --page-bg: #fffcf6;
+  --page-shadow: var(--shadow-page);
+  --danger: #a33b2b;
+}
+
+/* Light — cool, clean daylight paper */
+[data-theme="light"] {
+  --bg-app: #f3f4f6;
+  --bg-muted: #e5e7eb;
+  --surface: #fafafa;
+  --surface-elevated: #ffffff;
+  --surface-chrome: rgba(255, 255, 255, 0.9);
+  --ink: #1a1d23;
+  --ink-secondary: #4b5563;
+  --ink-muted: #6b7280;
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-soft: rgba(37, 99, 235, 0.1);
+  --border: rgba(26, 29, 35, 0.08);
+  --border-strong: rgba(26, 29, 35, 0.14);
+  --focus-ring: rgba(37, 99, 235, 0.4);
+  --page-bg: #ffffff;
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.05), 0 1px 3px rgba(15, 23, 42, 0.04);
+  --shadow-md: 0 4px 16px rgba(15, 23, 42, 0.08), 0 1px 3px rgba(15, 23, 42, 0.05);
+  --shadow-page: 0 8px 40px rgba(15, 23, 42, 0.1), 0 2px 8px rgba(15, 23, 42, 0.05);
+  --page-shadow: var(--shadow-page);
+}
+
+/* Sepia — warm, restful (default) */
+[data-theme="sepia"] {
+  --bg-app: #f0e6d2;
+  --bg-muted: #e4d6bc;
+  --surface: #f7efdf;
+  --surface-elevated: #fbf6ea;
+  --surface-chrome: rgba(247, 239, 223, 0.9);
+  --ink: #3a2f1e;
+  --ink-secondary: #6b5b45;
+  --ink-muted: #94856c;
+  --accent: #9a6432;
+  --accent-hover: #7d5026;
+  --accent-soft: rgba(154, 100, 50, 0.14);
+  --border: rgba(58, 47, 30, 0.1);
+  --border-strong: rgba(58, 47, 30, 0.16);
+  --focus-ring: rgba(154, 100, 50, 0.45);
+  --page-bg: #fbf6ea;
+  --shadow-sm: 0 1px 2px rgba(58, 47, 30, 0.06), 0 1px 3px rgba(58, 47, 30, 0.04);
+  --shadow-md: 0 4px 18px rgba(58, 47, 30, 0.1), 0 1px 3px rgba(58, 47, 30, 0.05);
+  --shadow-page: 0 10px 42px rgba(58, 47, 30, 0.14), 0 2px 8px rgba(58, 47, 30, 0.06);
+  --page-shadow: var(--shadow-page);
+}
+
+/* Dark — soft charcoal, not pure black; cool ink on warm-gray */
+[data-theme="dark"] {
+  --bg-app: #1a1b1e;
+  --bg-muted: #121316;
+  --surface: #222428;
+  --surface-elevated: #2a2c31;
+  --surface-chrome: rgba(34, 36, 40, 0.92);
+  --ink: #e8e6e1;
+  --ink-secondary: #a8a69f;
+  --ink-muted: #7a7872;
+  --accent: #d4a574;
+  --accent-hover: #e0b88a;
+  --accent-soft: rgba(212, 165, 116, 0.14);
+  --border: rgba(232, 230, 225, 0.08);
+  --border-strong: rgba(232, 230, 225, 0.14);
+  --focus-ring: rgba(212, 165, 116, 0.45);
+  --page-bg: #2a2c31;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25);
+  --shadow-md: 0 4px 20px rgba(0, 0, 0, 0.35);
+  --shadow-page: 0 12px 48px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.25);
+  --page-shadow: var(--shadow-page);
+  --danger: #e07a6c;
+}
+
+/* Reading font families (html[data-font]) */
+html[data-font="literata"] { --font-reading: "Literata", "Source Serif 4", Georgia, serif; }
+html[data-font="source-serif"] { --font-reading: "Source Serif 4", Georgia, serif; }
+html[data-font="merriweather"] { --font-reading: "Merriweather", Georgia, serif; }
+html[data-font="ibm-plex-serif"] { --font-reading: "IBM Plex Serif", Georgia, serif; }
+html[data-font="georgia"] { --font-reading: Georgia, "Times New Roman", serif; }
+html[data-font="vazirmatn"] { --font-reading: "Vazirmatn", "Tahoma", sans-serif; }
+html[data-font="samim"] { --font-reading: "Samim", "Vazirmatn", "Tahoma", sans-serif; }
+html[data-font="shabnam"] { --font-reading: "Shabnam", "Vazirmatn", "Tahoma", sans-serif; }
+html[data-font="sahel"] { --font-reading: "Sahel", "Vazirmatn", "Tahoma", sans-serif; }
+html[data-font="tanha"] { --font-reading: "Tanha", "Vazirmatn", "Tahoma", sans-serif; }
+html[data-font="parastoo"] { --font-reading: "Parastoo", "Vazirmatn", Georgia, serif; }
+html[data-font="gandom"] { --font-reading: "Gandom", "Vazirmatn", Georgia, serif; }
