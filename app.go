@@ -300,6 +300,10 @@ func (a *App) RemoveFromLibrary(id string) error {
 func (a *App) SaveProgress(pageIndex, chapter, subPage int, scroll float64) error {
 	a.mu.Lock()
 	doc := a.openDoc
+	if doc != nil {
+		// Keep backend cursor in sync for any future reads
+		doc.PageIndex = pageIndex
+	}
 	a.mu.Unlock()
 	if doc == nil || doc.ID == "" || a.lib == nil {
 		return nil
@@ -314,6 +318,26 @@ func (a *App) SaveProgress(pageIndex, chapter, subPage int, scroll float64) erro
 		subPage = 0
 	}
 	return a.lib.UpdateProgress(doc.ID, pageIndex, chapter, subPage, scroll)
+}
+
+// GetProgress returns saved position for the open book (or zeros).
+func (a *App) GetProgress() map[string]interface{} {
+	a.mu.Lock()
+	doc := a.openDoc
+	a.mu.Unlock()
+	out := map[string]interface{}{
+		"page": 0, "chapter": 0, "subPage": 0, "scroll": 0.0,
+	}
+	if doc == nil || doc.ID == "" || a.lib == nil {
+		return out
+	}
+	if b, ok := a.lib.Get(doc.ID); ok {
+		out["page"] = b.LastPage
+		out["chapter"] = b.LastChapter
+		out["subPage"] = b.LastSubPage
+		out["scroll"] = b.LastScroll
+	}
+	return out
 }
 
 func (a *App) openPDF(path string, existingID string) (*DocumentInfo, error) {
@@ -379,25 +403,35 @@ func (a *App) openPDF(path string, existingID string) (*DocumentInfo, error) {
 		if lastPage < 0 {
 			lastPage = 0
 		}
-		book.LastPage = lastPage
-		book.LastScroll = lastScroll
+		// Do not assign progress on book for Upsert — Upsert preserves library progress.
 		saved, err := a.lib.Upsert(book)
 		if err != nil {
 			runtime.LogWarningf(a.ctx, "library upsert: %v", err)
 		} else {
 			book = saved
+			// Prefer authoritative progress from store after upsert
+			lastPage = book.LastPage
+			lastScroll = book.LastScroll
 		}
 	}
 
-	// Thumbnail cover from page 0 (best-effort)
+	// Thumbnail cover from page 0 (best-effort) — never touches progress fields via Upsert
 	if a.lib != nil && book.CoverDataURL == "" {
 		if cover, _, _, err := a.renderer.RenderPage(path, 0, 48); err == nil {
 			book.CoverDataURL = cover
-			book.LastPage = lastPage
 			if saved, err := a.lib.Upsert(book); err == nil {
 				book = saved
+				lastPage = book.LastPage
+				lastScroll = book.LastScroll
 			}
 		}
+	}
+
+	if lastPage >= count {
+		lastPage = count - 1
+	}
+	if lastPage < 0 {
+		lastPage = 0
 	}
 
 	a.epubBook = nil
@@ -489,12 +523,13 @@ func (a *App) openEPUB(path string, existingID string) (*DocumentInfo, error) {
 		if lastPage < 0 {
 			lastPage = 0
 		}
-		libBook.LastPage = lastPage
-		libBook.LastChapter = lastChapter
-		libBook.LastSubPage = lastSubPage
-		libBook.LastScroll = lastScroll
+		// Upsert preserves progress from store; re-read after
 		if saved, err := a.lib.Upsert(libBook); err == nil {
 			libBook = saved
+			lastPage = libBook.LastPage
+			lastChapter = libBook.LastChapter
+			lastSubPage = libBook.LastSubPage
+			lastScroll = libBook.LastScroll
 		}
 	}
 
@@ -708,19 +743,17 @@ func (a *App) GetDocument() *DocumentInfo {
 	}
 }
 
-// CloseDocument clears the open document and saves progress.
+// CloseDocument clears the open document.
+// Progress must already be flushed by the frontend via SaveProgress —
+// do NOT overwrite library position with a stale backend page index.
 func (a *App) CloseDocument() {
 	a.mu.Lock()
-	doc := a.openDoc
 	a.openDoc = nil
 	a.epubBook = nil
 	renderer := a.renderer
 	a.mu.Unlock()
 	if renderer != nil {
 		renderer.CloseDocument()
-	}
-	if doc != nil && a.lib != nil && doc.ID != "" {
-		_ = a.lib.UpdateProgress(doc.ID, doc.PageIndex, 0, 0, 0)
 	}
 }
 

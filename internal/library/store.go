@@ -177,15 +177,20 @@ func (s *Store) Upsert(book Book) (Book, error) {
 
 	for i, b := range s.data.Books {
 		if b.ID == book.ID || equalPath(b.Path, book.Path) {
-			// Keep existing id
+			// Keep existing id + timestamps
 			book.ID = b.ID
 			if book.AddedAtUnix == 0 {
 				book.AddedAtUnix = b.AddedAtUnix
 			}
-			// Prefer existing cover if new empty
 			if book.CoverDataURL == "" {
 				book.CoverDataURL = b.CoverDataURL
 			}
+			// CRITICAL: Upsert is metadata-only. Never wipe reading progress here.
+			// UpdateProgress is the only path that intentionally writes position.
+			book.LastPage = b.LastPage
+			book.LastChapter = b.LastChapter
+			book.LastSubPage = b.LastSubPage
+			book.LastScroll = b.LastScroll
 			s.data.Books[i] = book
 			return book, s.saveLocked()
 		}

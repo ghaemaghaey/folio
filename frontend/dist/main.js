@@ -4,8 +4,8 @@
  */
 
 const THEMES = ["sepia", "light", "dark"];
-/** Fixed render DPI — zoom is CSS-only (no re-render). */
-const BASE_DPI = 144;
+/** Fixed render DPI — zoom is CSS-only (no re-render). Disk-cached at this DPI. */
+const BASE_DPI = 128;
 const ZOOM_MIN = 0.5;
 const ZOOM_MAX = 3;
 const ZOOM_STEP = 0.1;
@@ -388,27 +388,38 @@ function toast(msg, isError = false) {
 
 function scheduleProgress() {
   if (state.progressTimer) clearTimeout(state.progressTimer);
-  state.progressTimer = setTimeout(async () => {
-    if (!hasWails() || !state.doc) return;
-    try {
-      if (state.doc.format === "epub") {
-        recomputeGlobalPages();
-        await api().SaveProgress(
-          state.globalPage,
-          state.epubChapterIndex,
-          state.epubPage,
-          currentScrollRatio()
-        );
-      } else {
-        await api().SaveProgress(
-          state.doc.pageIndex || 0,
-          0,
-          0,
-          currentScrollRatio()
-        );
-      }
-    } catch (_) {}
-  }, 400);
+  state.progressTimer = setTimeout(() => {
+    flushProgress().catch(() => {});
+  }, 250);
+}
+
+/** Immediate write of reading position (awaitable). */
+async function flushProgress() {
+  if (state.progressTimer) {
+    clearTimeout(state.progressTimer);
+    state.progressTimer = null;
+  }
+  if (!hasWails() || !state.doc || !state.doc.id) return;
+  try {
+    if (state.doc.format === "epub") {
+      recomputeGlobalPages();
+      await api().SaveProgress(
+        state.globalPage | 0,
+        state.epubChapterIndex | 0,
+        state.epubPage | 0,
+        currentScrollRatio() || 0
+      );
+    } else {
+      await api().SaveProgress(
+        (state.doc.pageIndex || 0) | 0,
+        0,
+        0,
+        currentScrollRatio() || 0
+      );
+    }
+  } catch (err) {
+    console.error("SaveProgress failed", err);
+  }
 }
 
 /** Sum measured chapter pages; unknown chapters count as 1 until measured. */
@@ -654,9 +665,21 @@ async function enterDocument(doc) {
     });
   } else if (state.mode === "scroll") {
     await reloadScroll(true);
-    restoreScroll(state.doc.lastScroll);
+    // Jump to last-read PDF page, then restore fine scroll if any
+    const slot = el.scrollViewport.querySelector(
+      `[data-page="${state.doc.pageIndex}"]`
+    );
+    if (slot) {
+      slot.scrollIntoView({ block: "start", behavior: "auto" });
+    }
+    if (state.doc.lastScroll > 0.02) {
+      // minor offset within continuous view
+      restoreScroll(state.doc.lastScroll);
+    }
+    prefetchAround(state.doc.pageIndex);
   } else {
     await renderPage();
+    prefetchAround(state.doc.pageIndex);
   }
   updateChromeMeta();
   syncGuideWidth();
@@ -679,22 +702,7 @@ function setupViewports() {
 async function closeReader() {
   if (hasWails() && state.doc) {
     try {
-      if (state.doc.format === "epub") {
-        recomputeGlobalPages();
-        await api().SaveProgress(
-          state.globalPage,
-          state.epubChapterIndex,
-          state.epubPage,
-          currentScrollRatio()
-        );
-      } else {
-        await api().SaveProgress(
-          state.doc.pageIndex || 0,
-          0,
-          0,
-          currentScrollRatio()
-        );
-      }
+      await flushProgress();
       await api().CloseDocument();
     } catch (_) {}
   }
