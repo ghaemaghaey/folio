@@ -13,7 +13,8 @@ if (Get-Command wails -ErrorAction SilentlyContinue) {
     exit $LASTEXITCODE
 }
 
-Write-Host "wails CLI not found; falling back to: go build -tags production"
-go build -tags production -ldflags "-s -w" -o "build\bin\folio.exe" .
+Write-Host "wails CLI not found; falling back to: go build -tags production (no console)"
+# -H windowsgui = no terminal window on Windows
+go build -tags production -ldflags "-s -w -H windowsgui" -o "build\bin\folio.exe" .
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Write-Host "Built build\bin\folio.exe"

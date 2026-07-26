@@ -145,9 +145,6 @@ function applyFont(id) {
   document.querySelectorAll(".font-chip").forEach((c) => {
     c.classList.toggle("is-active", c.dataset.font === id);
   });
-  if (state.doc?.format === "epub" && state.mode === "page") {
-    requestAnimationFrame(() => layoutEpubPages());
-  }
 }
 /**
  * Zoom is visual only for PDFs (scale the existing bitmap).
@@ -231,12 +228,13 @@ function applyZoom(z) {
     return;
   }
 
-  // EPUB: font/layout scale
-  if (state.mode === "page") {
-    const stay = state.epubPage;
+  // EPUB: CSS font scale only — keep scroll position ratio
+  if (state.doc?.format === "epub") {
+    const ratio = currentScrollRatio();
     requestAnimationFrame(() => {
-      layoutEpubPages();
-      setEpubPage(stay);
+      restoreScroll(ratio);
+      updateEpubPositionFromScroll();
+      updateChromeMeta();
     });
   }
   syncGuideWidth();
@@ -402,11 +400,11 @@ async function flushProgress() {
   if (!hasWails() || !state.doc || !state.doc.id) return;
   try {
     if (state.doc.format === "epub") {
-      recomputeGlobalPages();
+      updateEpubPositionFromScroll();
       await api().SaveProgress(
         state.globalPage | 0,
         state.epubChapterIndex | 0,
-        state.epubPage | 0,
+        state.globalPage | 0,
         currentScrollRatio() || 0
       );
     } else {
@@ -422,54 +420,19 @@ async function flushProgress() {
   }
 }
 
-/** Sum measured chapter pages; unknown chapters count as 1 until measured. */
-function recomputeGlobalPages() {
-  if (!state.doc || state.doc.format !== "epub") return;
-  const chCount = state.doc.chapterCount || 0;
-  let total = 0;
-  let global = 0;
-  for (let i = 0; i < chCount; i++) {
-    const n = state.chapterPageCounts[i] || (i === state.epubChapterIndex ? state.epubPageCount : 0) || 1;
-    if (i < state.epubChapterIndex) global += n;
-    total += n;
-  }
-  global += state.epubPage || 0;
-  // Prefer live chapter page count for current chapter
-  const curN = state.chapterPageCounts[state.epubChapterIndex] || state.epubPageCount || 1;
-  // Rebuild total with accurate current
-  total = 0;
-  global = 0;
-  for (let i = 0; i < chCount; i++) {
-    const n =
-      i === state.epubChapterIndex
-        ? Math.max(1, state.epubPageCount || state.chapterPageCounts[i] || 1)
-        : state.chapterPageCounts[i] || 1;
-    if (i < state.epubChapterIndex) global += n;
-    total += n;
-  }
-  global += Math.min(state.epubPage, Math.max(0, curN - 1));
-  state.globalPage = global;
-  state.globalPageTotal = Math.max(1, total);
-  state.doc.pageIndex = global;
-}
-
 function updateChromeMeta() {
   if (!state.doc) return;
   el.readerTitle.textContent = state.doc.title || "Document";
   if (state.doc.format === "epub") {
-    recomputeGlobalPages();
+    updateEpubPositionFromScroll();
     const ch = (state.epubChapterIndex ?? 0) + 1;
     const chName =
       state.toc?.[state.epubChapterIndex]?.label || `Chapter ${ch}`;
-    const g = state.globalPage + 1;
-    const gt = Math.max(1, state.globalPageTotal);
-    if (state.mode === "page") {
-      el.readerMeta.textContent = `${chName}`;
-      el.pageIndicator.textContent = `${g} / ${gt}`;
-    } else {
-      el.readerMeta.textContent = `${chName} · scroll`;
-      el.pageIndicator.textContent = `${g} / ${gt}`;
-    }
+    const g = (state.globalPage || 0) + 1;
+    const gt = Math.max(1, state.globalPageTotal || 1);
+    el.readerMeta.textContent = chName;
+    el.pageIndicator.textContent = `${g} / ${gt}`;
+    state.doc.pageIndex = state.globalPage;
   } else {
     const n = (state.doc.pageIndex ?? 0) + 1;
     const total = state.doc.pageCount ?? 1;
@@ -477,6 +440,34 @@ function updateChromeMeta() {
     el.pageIndicator.textContent = `${n} / ${total}`;
   }
   syncGuideWidth();
+}
+
+/** Map continuous EPUB scroll → virtual page + chapter (like a long PDF). */
+function updateEpubPositionFromScroll() {
+  const v = el.epubBook;
+  if (!v || !state.doc) return;
+  const pageH = Math.max(1, v.clientHeight);
+  const totalH = Math.max(pageH, el.epubContent?.scrollHeight || pageH);
+  state.globalPageTotal = Math.max(1, Math.ceil(totalH / pageH - 0.001));
+  state.globalPage = Math.min(
+    state.globalPageTotal - 1,
+    Math.max(0, Math.floor(v.scrollTop / pageH + 0.01))
+  );
+  state.epubPage = state.globalPage;
+  state.epubPageCount = state.globalPageTotal;
+
+  // Visible chapter from section tops
+  const sections = el.epubContent?.querySelectorAll(".epub-chapter") || [];
+  const vrTop = v.getBoundingClientRect().top + 8;
+  let ch = 0;
+  sections.forEach((sec) => {
+    const r = sec.getBoundingClientRect();
+    if (r.top <= vrTop + pageH * 0.35) {
+      ch = parseInt(sec.dataset.chapter || "0", 10) || 0;
+    }
+  });
+  state.epubChapterIndex = ch;
+  highlightTOC();
 }
 
 // ─── Views ───────────────────────────────────────────────────
@@ -639,29 +630,20 @@ async function enterDocument(doc) {
   state.globalPage = doc.pageIndex || 0;
   state.globalPageTotal = Math.max(1, doc.pageCount || 1);
 
-  // EPUB: resume chapter + page-within-chapter (not chapter start)
-  if (state.doc.format === "epub") {
-    state.epubChapterIndex = state.doc.lastChapter || 0;
-    state.epubPage = state.doc.lastSubPage || 0;
-  } else {
-    state.epubChapterIndex = 0;
-    state.epubPage = 0;
-  }
-
-  // EPUB defaults to page mode (book-like), PDF keeps user preference
-  if (state.doc.format === "epub" && state.mode !== "page" && state.mode !== "scroll") {
-    applyMode("page");
-  }
+  state.epubChapterIndex = state.doc.lastChapter || 0;
+  state.epubPage = state.doc.lastSubPage || 0;
 
   showReader();
   setupViewports();
   el.tocBtn.classList.toggle("is-hidden", state.doc.format !== "epub");
+  // Mode toggle is for PDF only — EPUB is always continuous full-book scroll
+  el.modeToggle?.classList.toggle("is-hidden", state.doc.format === "epub");
 
   if (state.doc.format === "epub") {
     await loadTOC();
-    await loadEpubChapter(state.epubChapterIndex, {
-      restorePage: state.epubPage,
-      restoreScroll: state.mode === "scroll",
+    await loadEpubContinuous({
+      restoreScroll: state.doc.lastScroll || 0,
+      restoreChapter: state.epubChapterIndex,
     });
   } else if (state.mode === "scroll") {
     await reloadScroll(true);
@@ -688,15 +670,15 @@ async function enterDocument(doc) {
 function setupViewports() {
   const isEpub = state.doc?.format === "epub";
   el.epubViewport.classList.toggle("is-hidden", !isEpub);
-  el.pageViewport.classList.toggle(
-    "is-hidden",
-    isEpub || state.mode === "scroll"
-  );
-  el.scrollViewport.classList.toggle(
-    "is-hidden",
-    isEpub || state.mode !== "scroll"
-  );
-  el.epubViewport.setAttribute("data-mode", state.mode);
+  // EPUB is always continuous scroll (full book)
+  if (isEpub) {
+    el.epubViewport.setAttribute("data-mode", "scroll");
+    el.pageViewport.classList.add("is-hidden");
+    el.scrollViewport.classList.add("is-hidden");
+    return;
+  }
+  el.pageViewport.classList.toggle("is-hidden", state.mode === "scroll");
+  el.scrollViewport.classList.toggle("is-hidden", state.mode !== "scroll");
 }
 
 async function closeReader() {
@@ -716,7 +698,7 @@ async function closeReader() {
 }
 
 function currentScrollRatio() {
-  if (state.doc?.format === "epub" && state.mode === "scroll") {
+  if (state.doc?.format === "epub") {
     const v = el.epubBook;
     if (!v || v.scrollHeight <= v.clientHeight) return 0;
     return v.scrollTop / (v.scrollHeight - v.clientHeight);
@@ -726,23 +708,19 @@ function currentScrollRatio() {
     if (!v || v.scrollHeight <= v.clientHeight) return 0;
     return v.scrollTop / (v.scrollHeight - v.clientHeight);
   }
-  if (state.doc?.format === "epub" && state.mode === "page") {
-    return state.epubPageCount > 1
-      ? state.epubPage / (state.epubPageCount - 1)
-      : 0;
-  }
   return 0;
 }
 
 function restoreScroll(ratio) {
-  if (!ratio) return;
-  requestAnimationFrame(() => {
+  if (ratio == null || ratio <= 0) return;
+  const apply = () => {
     const v =
       state.doc?.format === "epub" ? el.epubBook : el.scrollViewport;
     if (!v) return;
     const max = v.scrollHeight - v.clientHeight;
-    if (max > 0) v.scrollTop = max * ratio;
-  });
+    if (max > 0) v.scrollTop = max * Math.min(1, Math.max(0, ratio));
+  };
+  requestAnimationFrame(() => requestAnimationFrame(apply));
 }
 
 // ─── PDF (cached + prefetch) ─────────────────────────────────
@@ -849,22 +827,11 @@ async function goRelative(dir) {
   if (!state.doc || state.rendering) return;
 
   if (state.doc.format === "epub") {
-    if (state.mode === "page") {
-      const next = state.epubPage + dir;
-      if (next >= 0 && next < state.epubPageCount) {
-        setEpubPage(next);
-        return;
-      }
-      // chapter boundary
-      const ch = state.epubChapterIndex + dir;
-      if (ch < 0 || ch >= (state.doc.chapterCount || 0)) return;
-      await loadEpubChapter(ch, { atEnd: dir < 0 });
-      return;
-    }
-    // scroll mode: chapter jump
-    const ch = state.epubChapterIndex + dir;
-    if (ch < 0 || ch >= (state.doc.chapterCount || 0)) return;
-    await loadEpubChapter(ch);
+    // Continuous book: step by one viewport "page"
+    const v = el.epubBook;
+    if (!v) return;
+    const pageH = Math.max(1, v.clientHeight);
+    v.scrollBy({ top: dir * pageH * 0.92, behavior: "smooth" });
     return;
   }
 
@@ -978,7 +945,6 @@ async function loadTOC() {
   if (!hasWails()) return;
   try {
     const raw = (await api().GetEPUBTOC()) || [];
-    // Wails may expose either JSON tags or Go field names
     state.toc = raw.map((item, i) => ({
       index: item.index ?? item.Index ?? i,
       label: item.label || item.Label || `Chapter ${(item.index ?? item.Index ?? i) + 1}`,
@@ -994,10 +960,9 @@ async function loadTOC() {
     btn.textContent = item.label;
     btn.dataset.index = String(item.index);
     if (item.index === state.epubChapterIndex) btn.classList.add("is-active");
-    btn.addEventListener("click", async (e) => {
+    btn.addEventListener("click", (e) => {
       e.stopPropagation();
-      await loadEpubChapter(item.index);
-      // keep panel open so user can jump again; only close on explicit close
+      jumpToEpubChapter(item.index);
     });
     li.appendChild(btn);
     el.tocList.appendChild(li);
@@ -1013,56 +978,58 @@ function highlightTOC() {
   });
 }
 
-async function loadEpubChapter(index, opts = {}) {
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/**
+ * Load the entire EPUB as one continuous vertical document (all chapters).
+ * Progress = scroll ratio + virtual page index — same idea as a long PDF scroll.
+ */
+async function loadEpubContinuous(opts = {}) {
   if (!hasWails() || !state.doc) return;
   state.rendering = true;
+  el.epubContent.innerHTML =
+    '<p class="epub-loading">Loading book…</p>';
   try {
-    const ch = await api().GetEPUBChapter(index);
-    el.epubContent.innerHTML = ch.html || "<p>(Empty chapter)</p>";
-    state.epubChapterIndex = ch.index;
-    state.doc.chapterCount = ch.chapterCount;
-    highlightTOC();
+    const chapters = (await api().GetAllEPUBChapters()) || [];
+    state.doc.chapterCount = chapters.length || state.doc.chapterCount || 1;
+    const parts = [];
+    for (const ch of chapters) {
+      const idx = ch.index ?? ch.Index ?? 0;
+      const label = ch.label || ch.Label || `Chapter ${idx + 1}`;
+      const html = ch.html || ch.HTML || "";
+      parts.push(
+        `<section class="epub-chapter" data-chapter="${idx}" id="epub-ch-${idx}">` +
+          `<header class="epub-chapter-head">${escapeHtml(label)}</header>` +
+          `<div class="epub-chapter-body">${html}</div>` +
+          `</section>`
+      );
+    }
+    el.epubContent.innerHTML = parts.join("") || "<p>(Empty book)</p>";
+    el.epubContent.style.transform = "none";
+    el.epubContent.style.height = "auto";
+    el.epubContent.style.columns = "auto";
     wireEpubInteractions();
 
-    if (state.mode === "page") {
-      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-      layoutEpubPages();
-      let page = 0;
-      if (opts.atEnd) page = Math.max(0, state.epubPageCount - 1);
-      else if (typeof opts.restorePage === "number") {
-        page = Math.min(
-          Math.max(0, opts.restorePage),
-          Math.max(0, state.epubPageCount - 1)
-        );
-      } else if (opts.keepPage) {
-        page = Math.min(state.epubPage, Math.max(0, state.epubPageCount - 1));
-      }
-      setEpubPage(page);
-      if (opts.fragment) {
-        // page mode: jump to chapter page 0 of fragment chapter is fine
-      }
+    // Single continuous scroller
+    el.epubBook.onscroll = onEpubScroll;
+
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+    if (opts.restoreScroll > 0) {
+      restoreScroll(opts.restoreScroll);
+    } else if (typeof opts.restoreChapter === "number" && opts.restoreChapter > 0) {
+      jumpToEpubChapter(opts.restoreChapter, false);
     } else {
-      el.epubContent.style.transform = "none";
-      if (opts.restoreScroll) restoreScroll(state.doc.lastScroll);
-      else el.epubBook.scrollTop = 0;
-      // Approximate page from scroll after layout
-      state.epubPageCount = Math.max(
-        1,
-        Math.ceil(
-          (el.epubContent.scrollHeight || 1) /
-            Math.max(1, el.epubBook.clientHeight)
-        )
-      );
-      state.chapterPageCounts[state.epubChapterIndex] = state.epubPageCount;
-      if (opts.fragment) {
-        requestAnimationFrame(() => {
-          const target = el.epubContent.querySelector(
-            `#${CSS.escape(opts.fragment)}, [name="${CSS.escape(opts.fragment)}"]`
-          );
-          target?.scrollIntoView({ block: "start" });
-        });
-      }
+      el.epubBook.scrollTop = 0;
     }
+
+    updateEpubPositionFromScroll();
     updateChromeMeta();
     scheduleProgress();
   } catch (err) {
@@ -1072,49 +1039,28 @@ async function loadEpubChapter(index, opts = {}) {
   }
 }
 
-/**
- * EPUB page mode: vertical book pages (clip by viewport height), not horizontal columns.
- * Scroll mode: continuous vertical flow of the chapter.
- */
-function layoutEpubPages() {
-  if (!el.epubContent || state.mode !== "page") return;
-  const pages = el.epubPages;
-  const content = el.epubContent;
-  const pageH = Math.max(1, pages.clientHeight);
-  const pageW = Math.max(1, pages.clientWidth);
-
-  // Reset column styles from any older horizontal mode
-  content.style.columnWidth = "auto";
-  content.style.columns = "auto";
-  content.style.columnGap = "0";
-  content.style.width = "100%";
-  content.style.height = "auto";
-  content.style.maxWidth = "none";
-  content.style.transform = "translateY(0)";
-  content.style.padding = "";
-
-  void content.offsetHeight;
-  const totalH = content.scrollHeight;
-  state.epubPageCount = Math.max(1, Math.ceil(totalH / pageH - 0.001));
-  state.chapterPageCounts[state.epubChapterIndex] = state.epubPageCount;
-  if (state.epubPage >= state.epubPageCount) {
-    state.epubPage = state.epubPageCount - 1;
+function jumpToEpubChapter(index, save = true) {
+  const sec = el.epubContent?.querySelector(`#epub-ch-${index}, [data-chapter="${index}"]`);
+  if (sec) {
+    sec.scrollIntoView({ block: "start", behavior: "auto" });
+    state.epubChapterIndex = index;
+    highlightTOC();
+    updateEpubPositionFromScroll();
+    updateChromeMeta();
+    if (save) scheduleProgress();
   }
-  state.epubPageHeight = pageH;
-  state.epubPageWidth = pageW;
-  recomputeGlobalPages();
-  syncGuideWidth();
 }
 
-function setEpubPage(n) {
-  const content = el.epubContent;
-  const pages = el.epubPages;
-  const pageH = state.epubPageHeight || Math.max(1, pages?.clientHeight || 1);
-  state.epubPage = Math.max(0, Math.min(n, state.epubPageCount - 1));
-  content.style.transition = "transform 200ms cubic-bezier(0.22,1,0.36,1)";
-  content.style.transform = `translateY(${-state.epubPage * pageH}px)`;
+function onEpubScroll() {
+  if (!state.doc || state.doc.format !== "epub") return;
+  updateEpubPositionFromScroll();
   updateChromeMeta();
   scheduleProgress();
+}
+
+// Kept for link resolution / chapter jumps from internal links
+async function loadEpubChapter(index) {
+  jumpToEpubChapter(index);
 }
 
 function wireEpubInteractions() {
@@ -1157,28 +1103,23 @@ async function onEpubLinkClick(e) {
     return;
   }
 
-  // Internal
   if (hasWails()) {
     try {
       const res = await api().ResolveEPUBLink(href);
       if (res && res.ok) {
-        if (res.index === state.epubChapterIndex && res.fragment) {
-          if (state.mode === "scroll") {
+        jumpToEpubChapter(res.index);
+        if (res.fragment) {
+          requestAnimationFrame(() => {
             const t = el.epubContent.querySelector(
               `#${CSS.escape(res.fragment)}, [name="${CSS.escape(res.fragment)}"]`
             );
             t?.scrollIntoView({ behavior: "smooth", block: "start" });
-          } else {
-            toast("Open this chapter in scroll mode to jump to anchors.");
-          }
-        } else {
-          await loadEpubChapter(res.index, { fragment: res.fragment });
+          });
         }
         return;
       }
     } catch (_) {}
   }
-  // Fragment only in current doc
   if (href.startsWith("#")) {
     const id = href.slice(1);
     const t = el.epubContent.querySelector(
@@ -1278,16 +1219,16 @@ function persistGuide() {
 // ─── Mode toggle ─────────────────────────────────────────────
 
 async function toggleMode() {
+  if (state.doc?.format === "epub") {
+    toast("EPUB is continuous scroll — use chapters to jump.");
+    return;
+  }
   const next = state.mode === "page" ? "scroll" : "page";
   applyMode(next);
   setupViewports();
   if (!state.doc) return;
-  if (state.doc.format === "pdf") {
-    if (next === "scroll") await reloadScroll(true);
-    else await renderPage();
-  } else {
-    await loadEpubChapter(state.epubChapterIndex);
-  }
+  if (next === "scroll") await reloadScroll(true);
+  else await renderPage();
 }
 
 // ─── Fonts UI ────────────────────────────────────────────────
@@ -1513,14 +1454,13 @@ function bindEvents() {
 
   // NO mousemove bumpChrome on stage
 
-  el.epubBook?.addEventListener("scroll", () => {
-    if (state.mode === "scroll") {
-      scheduleProgress();
-    }
-  });
+  // EPUB continuous scroll handler is set in loadEpubContinuous (onEpubScroll)
 
   window.addEventListener("resize", () => {
-    if (state.doc?.format === "epub" && state.mode === "page") layoutEpubPages();
+    if (state.doc?.format === "epub") {
+      updateEpubPositionFromScroll();
+      updateChromeMeta();
+    }
     syncGuideWidth();
   });
 
@@ -1676,6 +1616,7 @@ function setupDragPan(node) {
 }
 
 async function boot() {
+  // Paint UI immediately — no heavy work before first frame
   applyTheme(state.theme);
   applyFont(state.font);
   applyZoom(state.zoom);
@@ -1683,19 +1624,28 @@ async function boot() {
   applyGuideUI();
   buildFontChips();
   bindEvents();
+  el.version.textContent = "Folio";
 
-  if (hasWails()) {
-    try {
-      const v = await api().AppVersion();
-      el.version.textContent = `Folio v${v}`;
-    } catch (_) {
-      el.version.textContent = "Folio";
-    }
-    // Shelf first — do not block UI on PDF engine (lazy-loaded)
-    await refreshShelf();
-  } else {
+  if (!hasWails()) {
     el.version.textContent = "Folio · browser preview";
+    return;
   }
+  // Defer shelf + version so the window appears first
+  requestAnimationFrame(() => {
+    setTimeout(async () => {
+      try {
+        const v = await api().AppVersion();
+        el.version.textContent = `Folio v${v}`;
+      } catch (_) {}
+      // Retry shelf briefly — library may still be opening
+      for (let i = 0; i < 8; i++) {
+        await refreshShelf();
+        if (el.shelf && !el.shelf.classList.contains("is-hidden")) break;
+        if (el.shelf?.children?.length) break;
+        await new Promise((r) => setTimeout(r, 80));
+      }
+    }, 0);
+  });
 }
 
 document.addEventListener("DOMContentLoaded", boot);

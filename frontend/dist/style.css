@@ -1108,12 +1108,23 @@ html[data-font="gandom"] .epub-content {
   background: var(--page-bg);
 }
 
-/* Scroll mode: continuous vertical reading of the chapter */
+/* Continuous full-book EPUB (single vertical scroll) */
+.epub-viewport[data-mode="scroll"] {
+  background: var(--bg-muted);
+  padding: var(--space-4);
+  display: flex;
+  justify-content: center;
+}
+
 .epub-viewport[data-mode="scroll"] .epub-book {
   overflow: auto;
   overflow-x: hidden;
   box-shadow: var(--page-shadow);
   height: 100%;
+  width: min(100%, 42rem);
+  max-width: 100%;
+  background: var(--page-bg);
+  border-radius: 2px;
 }
 
 .epub-viewport[data-mode="scroll"] .epub-pages {
@@ -1125,10 +1136,44 @@ html[data-font="gandom"] .epub-content {
 .epub-viewport[data-mode="scroll"] .epub-content {
   height: auto;
   max-width: none;
-  padding: var(--space-6) var(--space-5);
+  padding: var(--space-6) var(--space-5) var(--space-8);
   columns: auto;
   column-width: auto;
   transform: none !important;
+  font-family: var(--font-reading);
+  font-size: calc(var(--reading-size) * var(--zoom-scale, 1));
+  line-height: var(--reading-line);
+  color: var(--ink);
+  background: var(--page-bg);
+}
+
+.epub-chapter {
+  padding-bottom: var(--space-6);
+  margin-bottom: var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.epub-chapter:last-child {
+  border-bottom: none;
+}
+
+.epub-chapter-head {
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  margin: 0 0 var(--space-4);
+  color: var(--ink);
+  letter-spacing: -0.02em;
+}
+
+.epub-chapter-body > *:first-child {
+  margin-top: 0;
+}
+
+.epub-loading {
+  text-align: center;
+  color: var(--ink-muted);
+  padding: var(--space-7);
 }
 
 /* Grab-to-pan surfaces */
