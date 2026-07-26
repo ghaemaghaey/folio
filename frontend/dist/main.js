@@ -986,44 +986,68 @@ function escapeHtml(s) {
     .replace(/"/g, "&quot;");
 }
 
+function epubChapterSectionHTML(idx, label, html) {
+  return (
+    `<section class="epub-chapter" data-chapter="${idx}" id="epub-ch-${idx}">` +
+    `<header class="epub-chapter-head">${escapeHtml(label)}</header>` +
+    `<div class="epub-chapter-body">${html || ""}</div>` +
+    `</section>`
+  );
+}
+
 /**
  * Load the entire EPUB as one continuous vertical document (all chapters).
- * Progress = scroll ratio + virtual page index — same idea as a long PDF scroll.
+ * Progressive load — never stuck forever on "Loading book…".
  */
 async function loadEpubContinuous(opts = {}) {
   if (!hasWails() || !state.doc) return;
   state.rendering = true;
+  state._epubClamping = false;
   el.epubContent.innerHTML =
     '<p class="epub-loading">Loading book…</p>';
+
+  const setStatus = (msg) => {
+    const p = el.epubContent.querySelector(".epub-loading");
+    if (p) p.textContent = msg;
+    else el.epubContent.innerHTML = `<p class="epub-loading">${escapeHtml(msg)}</p>`;
+  };
+
   try {
-    const chapters = (await api().GetAllEPUBChapters()) || [];
-    state.doc.chapterCount = chapters.length || state.doc.chapterCount || 1;
-    const parts = [];
-    for (const ch of chapters) {
-      const idx = ch.index ?? ch.Index ?? 0;
-      const label = ch.label || ch.Label || `Chapter ${idx + 1}`;
-      const html = ch.html || ch.HTML || "";
-      parts.push(
-        `<section class="epub-chapter" data-chapter="${idx}" id="epub-ch-${idx}">` +
-          `<header class="epub-chapter-head">${escapeHtml(label)}</header>` +
-          `<div class="epub-chapter-body">${html}</div>` +
-          `</section>`
-      );
+    const chapters = await fetchAllEpubChapters(setStatus);
+    if (!chapters.length) {
+      el.epubContent.innerHTML =
+        '<p class="epub-loading">This EPUB has no readable chapters.</p>';
+      return;
     }
-    el.epubContent.innerHTML = parts.join("") || "<p>(Empty book)</p>";
+
+    state.doc.chapterCount = chapters.length;
+    // Build off-DOM then swap once (faster than repeated innerHTML)
+    const html = chapters
+      .map((ch) => {
+        const idx = ch.index ?? ch.Index ?? 0;
+        const label = ch.label || ch.Label || `Chapter ${idx + 1}`;
+        const body = ch.html || ch.HTML || "";
+        return epubChapterSectionHTML(idx, label, body);
+      })
+      .join("");
+
+    el.epubContent.innerHTML = html || "<p>(Empty book)</p>";
     el.epubContent.style.transform = "none";
     el.epubContent.style.height = "auto";
     el.epubContent.style.columns = "auto";
+
     lockEpubVerticalOnly();
     clampEpubHorizontalOverflow();
     wireEpubInteractions();
-    // Re-clamp after layout (images load, fonts apply)
+
     requestAnimationFrame(() => {
       clampEpubHorizontalOverflow();
       lockEpubVerticalOnly();
     });
-    setTimeout(() => clampEpubHorizontalOverflow(), 300);
-    setTimeout(() => clampEpubHorizontalOverflow(), 1200);
+    // One delayed pass for late images — do not spam (avoids freeze loops)
+    setTimeout(() => {
+      if (state.doc?.format === "epub") clampEpubHorizontalOverflow();
+    }, 500);
 
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
 
@@ -1039,10 +1063,85 @@ async function loadEpubContinuous(opts = {}) {
     updateChromeMeta();
     scheduleProgress();
   } catch (err) {
-    toast(String(err?.message || err), true);
+    console.error("EPUB load failed", err);
+    const msg = String(err?.message || err || "Failed to load EPUB");
+    el.epubContent.innerHTML = `<p class="epub-loading is-error">${escapeHtml(msg)}</p>`;
+    toast(msg, true);
   } finally {
     state.rendering = false;
   }
+}
+
+/**
+ * Prefer GetAllEPUBChapters; fall back to per-chapter GetEPUBChapter with UI progress.
+ */
+async function fetchAllEpubChapters(setStatus) {
+  const app = api();
+
+  // Fast path: bulk API (if present in this binary)
+  if (typeof app.GetAllEPUBChapters === "function") {
+    setStatus("Loading book…");
+    try {
+      const bulk = await Promise.race([
+        app.GetAllEPUBChapters(),
+        new Promise((_, rej) =>
+          setTimeout(() => rej(new Error("timeout")), 120000)
+        ),
+      ]);
+      if (Array.isArray(bulk) && bulk.length) return bulk;
+    } catch (e) {
+      console.warn("GetAllEPUBChapters failed, falling back", e);
+      setStatus("Loading chapters…");
+    }
+  }
+
+  // Progressive fallback (always works if GetEPUBChapter exists)
+  let n = state.doc.chapterCount || state.toc?.length || 0;
+  if (typeof app.GetEPUBChapterCount === "function") {
+    try {
+      const c = await app.GetEPUBChapterCount();
+      if (c > 0) n = c;
+    } catch (_) {}
+  }
+  if (!n && typeof app.GetEPUBChapter === "function") {
+    // Probe count via TOC already loaded
+    n = state.toc?.length || 1;
+  }
+  if (!n) n = 1;
+
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    setStatus(`Loading chapter ${i + 1} of ${n}…`);
+    try {
+      const ch = await app.GetEPUBChapter(i);
+      if (ch) {
+        out.push(ch);
+        // Keep chapterCount in sync if API reports it
+        const reported = ch.chapterCount ?? ch.ChapterCount;
+        if (reported > n) n = reported;
+      } else {
+        out.push({
+          index: i,
+          label: `Chapter ${i + 1}`,
+          html: "<p></p>",
+          chapterCount: n,
+        });
+      }
+    } catch (e) {
+      console.warn("chapter", i, e);
+      out.push({
+        index: i,
+        label: `Chapter ${i + 1}`,
+        html: "<p></p>",
+        chapterCount: n,
+      });
+    }
+    // Yield to UI so the status text can paint
+    if (i % 2 === 1) {
+      await new Promise((r) => setTimeout(r, 0));
+    }
+  }
+  return out;
 }
 
 function jumpToEpubChapter(index, save = true) {
@@ -1115,15 +1214,7 @@ function lockEpubVerticalOnly() {
     },
     { passive: true }
   );
-  // MutationObserver: re-clamp if content injects wide nodes later
-  if (el.epubContent && !el.epubContent.dataset.folioObserve) {
-    el.epubContent.dataset.folioObserve = "1";
-    const mo = new MutationObserver(() => {
-      clampEpubHorizontalOverflow();
-      killX();
-    });
-    mo.observe(el.epubContent, { childList: true, subtree: true, attributes: true });
-  }
+  // Do NOT MutationObserver→clamp (softBreak mutates text → infinite loop / freeze)
   killX();
 }
 
@@ -1134,7 +1225,17 @@ function lockEpubVerticalOnly() {
 function clampEpubHorizontalOverflow() {
   const root = el.epubContent;
   if (!root) return;
+  // Re-entrancy guard — softBreak mutates DOM
+  if (state._epubClamping) return;
+  state._epubClamping = true;
+  try {
+    clampEpubHorizontalOverflowInner(root);
+  } finally {
+    state._epubClamping = false;
+  }
+}
 
+function clampEpubHorizontalOverflowInner(root) {
   // Inject once: strongest CSS override inside the reading column
   if (!root.querySelector("style[data-folio-epub-clamp]")) {
     const st = document.createElement("style");
@@ -1267,45 +1368,50 @@ function clampEpubHorizontalOverflow() {
 }
 
 /**
- * Insert zero-width break opportunities into long URLs / unbroken tokens
- * so they wrap inside the reading column (e.g. realclearpolitics.com/video/...).
+ * Insert zero-width break opportunities into long URLs / unbroken tokens.
+ * Skips nodes already processed (data-folio-softbroken).
  */
 function softBreakLongUrls(root) {
   if (!root) return;
-  const ZWSP = "\u200B"; // zero-width space — invisible wrap point
+  const ZWSP = "\u200B";
 
-  const breakToken = (s) => {
-    // Prefer breaks after URL punctuation; also every ~18 chars as fallback
-    return s
+  const breakToken = (s) =>
+    s
       .replace(/(https?:\/\/[^\s<>"']+)/gi, (url) =>
         url
           .replace(/([\/\?&=._\-+%#:~])/g, `$1${ZWSP}`)
           .replace(/(.{18})/g, `$1${ZWSP}`)
       )
-      .replace(/([^\s]{24})/g, `$1${ZWSP}`);
-  };
+      .replace(/([^\s]{24})(?!\u200B)/g, `$1${ZWSP}`);
 
-  // Style every anchor for break-all
   root.querySelectorAll("a").forEach((a) => {
     a.style.wordBreak = "break-all";
     a.style.overflowWrap = "anywhere";
     a.style.whiteSpace = "normal";
     a.style.maxWidth = "100%";
-    a.style.display = "inline";
   });
 
-  // Walk text nodes (link labels + plain-text URLs in paragraphs)
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
   const texts = [];
   while (walker.nextNode()) texts.push(walker.currentNode);
 
   for (const tn of texts) {
+    if (tn.parentElement?.closest?.("style,script")) continue;
+    // Avoid re-processing (would stack ZWSPs forever)
+    if (tn._folioSoftBroken) continue;
     const t = tn.nodeValue;
     if (!t || t.length < 30) continue;
-    // Only touch nodes that look like they contain a URL or a very long token
     if (!/https?:\/\/|[A-Za-z0-9_\-./%=]{40,}/.test(t)) continue;
+    // Already has soft breaks from a prior pass
+    if (t.includes(ZWSP) && t.length > 80) {
+      tn._folioSoftBroken = true;
+      continue;
+    }
     const next = breakToken(t);
-    if (next !== t) tn.nodeValue = next;
+    if (next !== t) {
+      tn.nodeValue = next;
+      tn._folioSoftBroken = true;
+    }
   }
 }
 

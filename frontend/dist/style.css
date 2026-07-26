@@ -1325,6 +1325,10 @@ html[data-font="gandom"] .epub-content {
   padding: var(--space-7);
 }
 
+.epub-loading.is-error {
+  color: var(--danger, #a33b2b);
+}
+
 /* Grab-to-pan surfaces */
 .is-pannable {
   cursor: grab;

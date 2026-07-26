@@ -748,18 +748,21 @@ func (a *App) GetEPUBChapter(index int) (*EPUBChapterDTO, error) {
 }
 
 // GetAllEPUBChapters returns every spine item's HTML for continuous full-book scroll.
+// Does not hold the app mutex for the whole book (avoids UI freezes / deadlocks).
 func (a *App) GetAllEPUBChapters() ([]EPUBChapterDTO, error) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.epubBook == nil || a.openDoc == nil || a.openDoc.Format != library.FormatEPUB {
+	book := a.epubBook
+	doc := a.openDoc
+	a.mu.Unlock()
+
+	if book == nil || doc == nil || doc.Format != library.FormatEPUB {
 		return nil, fmt.Errorf("no EPUB open")
 	}
-	n := a.epubBook.ChapterCount()
+	n := book.ChapterCount()
 	out := make([]EPUBChapterDTO, 0, n)
 	for i := 0; i < n; i++ {
-		ch, err := a.epubBook.GetChapter(i)
+		ch, err := book.GetChapter(i)
 		if err != nil {
-			// skip broken spine items but keep indices stable with a placeholder
 			out = append(out, EPUBChapterDTO{
 				Index:        i,
 				Label:        fmt.Sprintf("Chapter %d", i+1),
@@ -776,6 +779,16 @@ func (a *App) GetAllEPUBChapters() ([]EPUBChapterDTO, error) {
 		})
 	}
 	return out, nil
+}
+
+// GetEPUBChapterCount returns spine length for progressive loading.
+func (a *App) GetEPUBChapterCount() (int, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.epubBook == nil {
+		return 0, fmt.Errorf("no EPUB open")
+	}
+	return a.epubBook.ChapterCount(), nil
 }
 
 // GetDocument returns current document info.
