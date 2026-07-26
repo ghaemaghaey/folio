@@ -1086,32 +1086,109 @@ async function loadEpubChapter(index) {
   jumpToEpubChapter(index);
 }
 
-/** Force EPUB content to stay within the vertical column (no sideways scroll). */
+/**
+ * Force EPUB content into the column width so text never forces horizontal scroll.
+ * Publisher HTML often sets huge fixed widths / nowrap / long unbreakable strings.
+ */
 function clampEpubHorizontalOverflow() {
   const root = el.epubContent;
   if (!root) return;
+
+  // Inject once: strongest CSS override inside the reading column
+  if (!root.querySelector("style[data-folio-epub-clamp]")) {
+    const st = document.createElement("style");
+    st.setAttribute("data-folio-epub-clamp", "1");
+    st.textContent = `
+      .epub-content, .epub-content * {
+        max-width: 100% !important;
+        box-sizing: border-box !important;
+      }
+      .epub-content {
+        width: 100% !important;
+        overflow-x: hidden !important;
+        overflow-wrap: anywhere !important;
+        word-break: break-word !important;
+        word-wrap: break-word !important;
+      }
+      .epub-content p, .epub-content div, .epub-content span, .epub-content a,
+      .epub-content li, .epub-content td, .epub-content th, .epub-content h1,
+      .epub-content h2, .epub-content h3, .epub-content h4, .epub-content h5,
+      .epub-content h6, .epub-content label, .epub-content em, .epub-content strong {
+        white-space: normal !important;
+        overflow-wrap: anywhere !important;
+        word-break: break-word !important;
+        max-width: 100% !important;
+      }
+      .epub-content img, .epub-content svg, .epub-content video, .epub-content canvas,
+      .epub-content iframe, .epub-content object, .epub-content embed {
+        max-width: 100% !important;
+        height: auto !important;
+        width: auto !important;
+      }
+      .epub-content table {
+        width: 100% !important;
+        max-width: 100% !important;
+        table-layout: fixed !important;
+        display: table !important;
+        overflow: hidden !important;
+      }
+      .epub-content pre, .epub-content code {
+        white-space: pre-wrap !important;
+        overflow-x: hidden !important;
+        word-break: break-word !important;
+        max-width: 100% !important;
+      }
+    `;
+    root.insertBefore(st, root.firstChild);
+  }
+
+  // Strip HTML width attributes (common in old EPUBs)
+  root.querySelectorAll("[width], [height]").forEach((node) => {
+    if (node.tagName === "IMG" || node.tagName === "TABLE" || node.tagName === "TD" || node.tagName === "TH") {
+      node.removeAttribute("width");
+      if (node.tagName === "IMG") node.removeAttribute("height");
+    }
+  });
+
   root.querySelectorAll("[style]").forEach((node) => {
     const s = node.getAttribute("style") || "";
-    // Strip common width breakers from publisher CSS inline styles
     let next = s
       .replace(/max-width\s*:\s*[^;]+;?/gi, "")
-      .replace(/width\s*:\s*\d{3,}px;?/gi, "width:100%;")
       .replace(/min-width\s*:\s*[^;]+;?/gi, "")
-      .replace(/white-space\s*:\s*nowrap;?/gi, "white-space:normal;");
+      .replace(/width\s*:\s*[^;]+;?/gi, "width:100%;")
+      .replace(/white-space\s*:\s*nowrap;?/gi, "white-space:normal;")
+      .replace(/position\s*:\s*absolute;?/gi, "position:relative;")
+      .replace(/left\s*:\s*[^;]+;?/gi, "")
+      .replace(/margin-left\s*:\s*-?\d+px;?/gi, "")
+      .replace(/transform\s*:\s*[^;]+;?/gi, "");
     if (next !== s) node.setAttribute("style", next);
   });
-  root.querySelectorAll("img, svg, table, pre, video, iframe").forEach((node) => {
+
+  root.querySelectorAll("img, svg, table, pre, video, iframe, object, embed").forEach((node) => {
     node.style.maxWidth = "100%";
-    if (node.tagName === "IMG" || node.tagName === "SVG") {
+    node.style.boxSizing = "border-box";
+    if (node.tagName === "IMG" || node.tagName === "SVG" || node.tagName === "VIDEO") {
       node.style.height = "auto";
+      node.style.width = "auto";
     }
     if (node.tagName === "TABLE") {
       node.style.width = "100%";
+      node.style.tableLayout = "fixed";
+      node.style.overflow = "hidden";
     }
-    if (node.tagName === "PRE") {
+    if (node.tagName === "PRE" || node.tagName === "CODE") {
       node.style.whiteSpace = "pre-wrap";
       node.style.overflowX = "hidden";
+      node.style.wordBreak = "break-word";
     }
+  });
+
+  // Keep scrollers vertical-only
+  [el.epubViewport, el.epubBook, el.epubPages, el.epubContent].forEach((n) => {
+    if (!n) return;
+    n.style.overflowX = "hidden";
+    n.style.maxWidth = "100%";
+    if (n === el.epubBook) n.scrollLeft = 0;
   });
 }
 
@@ -1644,9 +1721,19 @@ function setupDragPan(node) {
     const dx = e.clientX - state.pan.x;
     const dy = e.clientY - state.pan.y;
     if (Math.abs(dx) + Math.abs(dy) > 3) state.pan.moved = true;
-    // Drag content with finger: move opposite to pointer
-    node.scrollLeft = state.pan.sl - dx;
-    node.scrollTop = state.pan.st - dy;
+    // EPUB: vertical pan only (horizontal scroll ruins reading)
+    const epubOnlyY =
+      node === el.epubBook ||
+      node === el.epubPages ||
+      node === el.epubViewport ||
+      node.closest?.("#epub-viewport");
+    if (epubOnlyY || state.doc?.format === "epub") {
+      node.scrollTop = state.pan.st - dy;
+      node.scrollLeft = 0;
+    } else {
+      node.scrollLeft = state.pan.sl - dx;
+      node.scrollTop = state.pan.st - dy;
+    }
   });
 
   const endPan = (e) => {
