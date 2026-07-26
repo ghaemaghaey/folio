@@ -35,14 +35,16 @@ type openDocument struct {
 
 // DocumentInfo is returned when a book is opened.
 type DocumentInfo struct {
-	ID         string  `json:"id"`
-	Path       string  `json:"path"`
-	Title      string  `json:"title"`
-	Format     string  `json:"format"`
-	PageCount  int     `json:"pageCount"`
-	PageIndex  int     `json:"pageIndex"`
-	LastScroll float64 `json:"lastScroll"`
-	Status     string  `json:"status"`
+	ID          string  `json:"id"`
+	Path        string  `json:"path"`
+	Title       string  `json:"title"`
+	Format      string  `json:"format"`
+	PageCount   int     `json:"pageCount"`
+	PageIndex   int     `json:"pageIndex"`   // PDF page or EPUB global page
+	LastChapter int     `json:"lastChapter"` // EPUB spine index
+	LastSubPage int     `json:"lastSubPage"` // EPUB page within chapter
+	LastScroll  float64 `json:"lastScroll"`
+	Status      string  `json:"status"`
 }
 
 // PageImage is a rendered PDF page.
@@ -110,7 +112,7 @@ func (a *App) shutdown(ctx context.Context) {
 
 // AppVersion returns the app version string.
 func (a *App) AppVersion() string {
-	return "0.4.0"
+	return "0.5.0"
 }
 
 // OpenExternalURL opens http(s)/mailto links in the OS default browser.
@@ -293,8 +295,9 @@ func (a *App) RemoveFromLibrary(id string) error {
 	return a.lib.Remove(id)
 }
 
-// SaveProgress persists last page / scroll position.
-func (a *App) SaveProgress(pageIndex int, scroll float64) error {
+// SaveProgress persists reading position.
+// pageIndex: PDF page or EPUB global page. chapter/subPage used for EPUB restore.
+func (a *App) SaveProgress(pageIndex, chapter, subPage int, scroll float64) error {
 	a.mu.Lock()
 	doc := a.openDoc
 	a.mu.Unlock()
@@ -304,7 +307,13 @@ func (a *App) SaveProgress(pageIndex int, scroll float64) error {
 	if pageIndex < 0 {
 		pageIndex = 0
 	}
-	return a.lib.UpdateProgress(doc.ID, pageIndex, scroll)
+	if chapter < 0 {
+		chapter = 0
+	}
+	if subPage < 0 {
+		subPage = 0
+	}
+	return a.lib.UpdateProgress(doc.ID, pageIndex, chapter, subPage, scroll)
 }
 
 func (a *App) openPDF(path string, existingID string) (*DocumentInfo, error) {
@@ -354,7 +363,6 @@ func (a *App) openPDF(path string, existingID string) (*DocumentInfo, error) {
 				}
 			}
 		} else {
-			// match by path in list
 			for _, it := range a.lib.List() {
 				if strings.EqualFold(it.Path, path) {
 					lastPage = it.LastPage
@@ -429,8 +437,8 @@ func (a *App) openEPUB(path string, existingID string) (*DocumentInfo, error) {
 	if title == "" || title == "Untitled" {
 		title = titleFromPath(path)
 	}
-	count := bookEPUB.ChapterCount()
-	if count < 1 {
+	chapterCount := bookEPUB.ChapterCount()
+	if chapterCount < 1 {
 		return nil, fmt.Errorf("EPUB has no chapters")
 	}
 
@@ -439,37 +447,51 @@ func (a *App) openEPUB(path string, existingID string) (*DocumentInfo, error) {
 		Path:        path,
 		Title:       title,
 		Format:      library.FormatEPUB,
-		PageCount:   count,
+		PageCount:   chapterCount, // refined on client as pages are measured
 		FileSize:    meta.Size,
 		ModTimeUnix: meta.ModTimeUnix,
 		Fingerprint: meta.Fingerprint,
 	}
 
 	lastPage := 0
+	lastChapter := 0
+	lastSubPage := 0
 	lastScroll := 0.0
 	if a.lib != nil {
 		if existingID != "" {
 			if prev, ok := a.lib.Get(existingID); ok {
 				lastPage = prev.LastPage
+				lastChapter = prev.LastChapter
+				lastSubPage = prev.LastSubPage
 				lastScroll = prev.LastScroll
 			}
 		} else {
 			for _, it := range a.lib.List() {
 				if strings.EqualFold(it.Path, path) {
 					lastPage = it.LastPage
+					lastChapter = it.LastChapter
+					lastSubPage = it.LastSubPage
 					lastScroll = it.LastScroll
 					libBook.ID = it.ID
 					break
 				}
 			}
 		}
-		if lastPage >= count {
-			lastPage = count - 1
+		if lastChapter >= chapterCount {
+			lastChapter = chapterCount - 1
+		}
+		if lastChapter < 0 {
+			lastChapter = 0
+		}
+		if lastSubPage < 0 {
+			lastSubPage = 0
 		}
 		if lastPage < 0 {
 			lastPage = 0
 		}
 		libBook.LastPage = lastPage
+		libBook.LastChapter = lastChapter
+		libBook.LastSubPage = lastSubPage
 		libBook.LastScroll = lastScroll
 		if saved, err := a.lib.Upsert(libBook); err == nil {
 			libBook = saved
@@ -483,20 +505,22 @@ func (a *App) openEPUB(path string, existingID string) (*DocumentInfo, error) {
 		Path:      path,
 		Title:     libBook.Title,
 		Format:    library.FormatEPUB,
-		PageCount: count,
+		PageCount: chapterCount,
 		PageIndex: lastPage,
 	}
 	a.mu.Unlock()
 
 	return &DocumentInfo{
-		ID:         libBook.ID,
-		Path:       path,
-		Title:      libBook.Title,
-		Format:     string(library.FormatEPUB),
-		PageCount:  count,
-		PageIndex:  lastPage,
-		LastScroll: lastScroll,
-		Status:     "ok",
+		ID:          libBook.ID,
+		Path:        path,
+		Title:       libBook.Title,
+		Format:      string(library.FormatEPUB),
+		PageCount:   chapterCount,
+		PageIndex:   lastPage,
+		LastChapter: lastChapter,
+		LastSubPage: lastSubPage,
+		LastScroll:  lastScroll,
+		Status:      "ok",
 	}, nil
 }
 
@@ -696,7 +720,7 @@ func (a *App) CloseDocument() {
 		renderer.CloseDocument()
 	}
 	if doc != nil && a.lib != nil && doc.ID != "" {
-		_ = a.lib.UpdateProgress(doc.ID, doc.PageIndex, 0)
+		_ = a.lib.UpdateProgress(doc.ID, doc.PageIndex, 0, 0, 0)
 	}
 }
 

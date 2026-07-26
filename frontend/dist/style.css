@@ -486,6 +486,24 @@ img {
   background: var(--page-bg);
   user-select: none;
   -webkit-user-drag: none;
+  transition: filter 220ms var(--ease-soft);
+}
+
+/* Theme-matched PDF rendering (bitmap filters — no re-render) */
+[data-theme="sepia"] #page-image,
+[data-theme="sepia"] .scroll-page img {
+  filter: sepia(0.42) saturate(0.85) brightness(0.97) contrast(0.96);
+}
+
+[data-theme="light"] #page-image,
+[data-theme="light"] .scroll-page img {
+  filter: none;
+}
+
+[data-theme="dark"] #page-image,
+[data-theme="dark"] .scroll-page img {
+  /* Invert + hue flip keeps text readable on dark chrome */
+  filter: invert(0.92) hue-rotate(180deg) brightness(0.95) contrast(0.92);
 }
 
 .page-loading {
@@ -748,7 +766,7 @@ img {
   position: absolute;
   top: 3.75rem;
   right: var(--space-4);
-  z-index: 30;
+  z-index: 45;
   width: min(22rem, calc(100vw - 2rem));
   padding: var(--space-4);
   background: var(--surface-elevated);
@@ -756,9 +774,17 @@ img {
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-md);
   backdrop-filter: blur(12px);
+  pointer-events: auto;
 }
 
 .font-panel.is-hidden { display: none; }
+
+/* Panels stay interactive even if chrome bars are dimmed */
+.view--reader[data-chrome="hidden"] .font-panel:not(.is-hidden),
+.view--reader[data-chrome="hidden"] .guide-panel:not(.is-hidden) {
+  pointer-events: auto;
+  opacity: 1;
+}
 
 .font-panel-title {
   font-family: var(--font-display);
@@ -841,6 +867,7 @@ img {
   display: block;
   user-select: none;
   -webkit-user-drag: none;
+  transition: filter 220ms var(--ease-soft);
 }
 
 .scroll-page-slot {
@@ -1041,27 +1068,44 @@ html[data-font="gandom"] .epub-content {
   position: relative;
 }
 
-/* Page mode: vertical book pages (clip + translateY) */
+/* Page mode: paper-like page frame (matches PDF stage) */
+.epub-viewport[data-mode="page"] {
+  background: var(--bg-muted);
+  padding: var(--space-5);
+}
+
 .epub-viewport[data-mode="page"] .epub-book {
   overflow: hidden;
+  background: var(--page-bg);
+  box-shadow: var(--page-shadow);
+  border-radius: 2px;
+  max-width: min(100%, 920px);
+  margin: 0 auto;
+  height: 100%;
 }
 
 .epub-viewport[data-mode="page"] .epub-pages {
   overflow: hidden;
   height: 100%;
   width: 100%;
+  background: var(--page-bg);
 }
 
 .epub-viewport[data-mode="page"] .epub-content {
   width: 100%;
   height: auto;
-  padding: var(--space-5);
+  padding: var(--space-6) var(--space-5);
   box-sizing: border-box;
   margin: 0;
   max-width: none;
   columns: auto;
   column-width: auto;
   will-change: transform;
+  font-family: var(--font-reading);
+  font-size: calc(var(--reading-size) * var(--zoom-scale, 1));
+  line-height: var(--reading-line);
+  color: var(--ink);
+  background: var(--page-bg);
 }
 
 /* Scroll mode: continuous vertical reading of the chapter */
@@ -1149,13 +1193,14 @@ html[data-font="gandom"] .epub-content {
   position: absolute;
   top: 3.75rem;
   right: var(--space-4);
-  z-index: 36;
+  z-index: 45;
   width: min(18rem, calc(100vw - 2rem));
   padding: var(--space-4);
   background: var(--surface-elevated);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-md);
+  pointer-events: auto;
 }
 
 .guide-panel.is-hidden { display: none; }

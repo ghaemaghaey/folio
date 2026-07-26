@@ -54,6 +54,10 @@ const state = {
   clientCache: new Map(), // pageIndex -> rendered bitmap
   zoomLockPage: false, // while zooming, do not change current page from scroll
   epubPageHeight: 0,
+  chapterPageCounts: {}, // chapterIndex -> measured page count
+  globalPage: 0,
+  globalPageTotal: 0,
+  chromeHideTimer: null,
   pan: { active: false, el: null, x: 0, y: 0, sl: 0, st: 0, moved: false },
 };
 
@@ -129,6 +133,7 @@ function applyTheme(name) {
   state.theme = name;
   document.documentElement.setAttribute("data-theme", name);
   localStorage.setItem("folio.theme", name);
+  // PDF bitmaps get CSS theme filters via [data-theme] rules
 }
 function cycleTheme() {
   applyTheme(THEMES[(THEMES.indexOf(state.theme) + 1) % THEMES.length]);
@@ -293,24 +298,77 @@ function applyMode(mode) {
     state.mode === "page" ? "Switch to scroll" : "Switch to page mode";
 }
 
-// ─── Chrome: edge-only reveal, never on content click ────────
+// ─── Chrome: edge-only reveal; open panels pin chrome ────────
+
+function anyPanelOpen() {
+  return (
+    !el.fontPanel?.classList.contains("is-hidden") ||
+    !el.guidePanel?.classList.contains("is-hidden") ||
+    !el.tocPanel?.classList.contains("is-hidden")
+  );
+}
+
+function cancelChromeHide() {
+  if (state.chromeHideTimer) {
+    clearTimeout(state.chromeHideTimer);
+    state.chromeHideTimer = null;
+  }
+}
 
 function setChrome(v) {
   state.chromeVisible = v;
   el.reader.setAttribute("data-chrome", v ? "visible" : "hidden");
-  if (!v) {
-    el.fontPanel?.classList.add("is-hidden");
-  }
+  // Never auto-close popovers here — only closeAllPanels / explicit clicks do that
 }
 
 function showChromeBriefly() {
+  cancelChromeHide();
   setChrome(true);
 }
 
+function scheduleHideChrome() {
+  cancelChromeHide();
+  state.chromeHideTimer = setTimeout(() => {
+    state.chromeHideTimer = null;
+    // Keep chrome (and panels) while a panel is open or hovered
+    if (anyPanelOpen()) return;
+    if (
+      document.querySelector(
+        ".reader-chrome:hover, .font-panel:hover, .guide-panel:hover, .toc-panel:hover"
+      )
+    ) {
+      return;
+    }
+    setChrome(false);
+  }, 700);
+}
+
 function hideChrome() {
+  // If a header panel is open, only dim the bars — keep the panel
+  if (anyPanelOpen()) {
+    cancelChromeHide();
+    return;
+  }
+  cancelChromeHide();
   setChrome(false);
+}
+
+function closeAllPanels() {
   el.fontPanel?.classList.add("is-hidden");
-  // Never auto-close the chapters panel — user closes it explicitly
+  el.guidePanel?.classList.add("is-hidden");
+  // TOC is closed only via close button / Escape / open book leave
+}
+
+function openPanel(panelEl) {
+  // close other popovers (not TOC — TOC is a side drawer)
+  if (panelEl !== el.tocPanel) {
+    el.fontPanel?.classList.add("is-hidden");
+    el.guidePanel?.classList.add("is-hidden");
+  }
+  if (panelEl !== el.tocPanel) {
+    panelEl?.classList.remove("is-hidden");
+  }
+  showChromeBriefly();
 }
 
 // ─── Toast ───────────────────────────────────────────────────
@@ -328,37 +386,78 @@ function toast(msg, isError = false) {
 
 // ─── Progress / meta ─────────────────────────────────────────
 
-function scheduleProgress(pageIndex, scroll = 0) {
+function scheduleProgress() {
   if (state.progressTimer) clearTimeout(state.progressTimer);
   state.progressTimer = setTimeout(async () => {
     if (!hasWails() || !state.doc) return;
     try {
-      // For EPUB store chapter index; page-in-chapter via scroll
-      const idx =
-        state.doc.format === "epub" ? state.epubChapterIndex : pageIndex;
-      await api().SaveProgress(idx, scroll);
+      if (state.doc.format === "epub") {
+        recomputeGlobalPages();
+        await api().SaveProgress(
+          state.globalPage,
+          state.epubChapterIndex,
+          state.epubPage,
+          currentScrollRatio()
+        );
+      } else {
+        await api().SaveProgress(
+          state.doc.pageIndex || 0,
+          0,
+          0,
+          currentScrollRatio()
+        );
+      }
     } catch (_) {}
-  }, 450);
+  }, 400);
+}
+
+/** Sum measured chapter pages; unknown chapters count as 1 until measured. */
+function recomputeGlobalPages() {
+  if (!state.doc || state.doc.format !== "epub") return;
+  const chCount = state.doc.chapterCount || 0;
+  let total = 0;
+  let global = 0;
+  for (let i = 0; i < chCount; i++) {
+    const n = state.chapterPageCounts[i] || (i === state.epubChapterIndex ? state.epubPageCount : 0) || 1;
+    if (i < state.epubChapterIndex) global += n;
+    total += n;
+  }
+  global += state.epubPage || 0;
+  // Prefer live chapter page count for current chapter
+  const curN = state.chapterPageCounts[state.epubChapterIndex] || state.epubPageCount || 1;
+  // Rebuild total with accurate current
+  total = 0;
+  global = 0;
+  for (let i = 0; i < chCount; i++) {
+    const n =
+      i === state.epubChapterIndex
+        ? Math.max(1, state.epubPageCount || state.chapterPageCounts[i] || 1)
+        : state.chapterPageCounts[i] || 1;
+    if (i < state.epubChapterIndex) global += n;
+    total += n;
+  }
+  global += Math.min(state.epubPage, Math.max(0, curN - 1));
+  state.globalPage = global;
+  state.globalPageTotal = Math.max(1, total);
+  state.doc.pageIndex = global;
 }
 
 function updateChromeMeta() {
   if (!state.doc) return;
   el.readerTitle.textContent = state.doc.title || "Document";
   if (state.doc.format === "epub") {
+    recomputeGlobalPages();
     const ch = (state.epubChapterIndex ?? 0) + 1;
-    const chTotal = state.doc.chapterCount || state.doc.pageCount || 1;
     const chName =
-      state.toc?.[state.epubChapterIndex]?.label ||
-      state.toc?.[state.epubChapterIndex]?.Label ||
-      `Chapter ${ch}`;
+      state.toc?.[state.epubChapterIndex]?.label || `Chapter ${ch}`;
+    const g = state.globalPage + 1;
+    const gt = Math.max(1, state.globalPageTotal);
     if (state.mode === "page") {
-      const p = state.epubPage + 1;
-      const pt = Math.max(1, state.epubPageCount);
-      el.readerMeta.textContent = `${chName} · Page ${p} of ${pt}`;
-      el.pageIndicator.textContent = `p. ${p}/${pt}`;
+      el.readerMeta.textContent = `${chName}`;
+      el.pageIndicator.textContent = `${g} / ${gt}`;
     } else {
-      el.readerMeta.textContent = `${chName} (${ch}/${chTotal}) · scroll`;
-      el.pageIndicator.textContent = `Ch ${ch}/${chTotal}`;
+      el.readerMeta.textContent = `${chName} · scroll`;
+      el.pageIndicator.textContent = `${g} / ${gt}`;
     }
   } else {
     const n = (state.doc.pageIndex ?? 0) + 1;
@@ -445,7 +544,7 @@ async function refreshShelf() {
     meta.className = "shelf-meta";
     if (item.status === "ok") {
       const p = (item.lastPage || 0) + 1;
-      meta.textContent = item.format === "epub" ? `Ch. ${p}` : `p. ${p}`;
+      meta.textContent = `p. ${p}`;
     } else meta.textContent = item.statusLabel || "Unavailable";
     card.append(cover, title, meta);
     if (item.status !== "ok") {
@@ -520,18 +619,39 @@ async function enterDocument(doc) {
     chapterCount: doc.pageCount,
     pageIndex: doc.pageIndex || 0,
     lastScroll: doc.lastScroll || 0,
+    lastChapter: doc.lastChapter ?? doc.LastChapter ?? 0,
+    lastSubPage: doc.lastSubPage ?? doc.LastSubPage ?? 0,
   };
   state.scrollLoaded = new Set();
   state.clientCache.clear();
-  state.epubChapterIndex = doc.pageIndex || 0;
-  state.epubPage = 0;
+  state.chapterPageCounts = {};
+  state.globalPage = doc.pageIndex || 0;
+  state.globalPageTotal = Math.max(1, doc.pageCount || 1);
+
+  // EPUB: resume chapter + page-within-chapter (not chapter start)
+  if (state.doc.format === "epub") {
+    state.epubChapterIndex = state.doc.lastChapter || 0;
+    state.epubPage = state.doc.lastSubPage || 0;
+  } else {
+    state.epubChapterIndex = 0;
+    state.epubPage = 0;
+  }
+
+  // EPUB defaults to page mode (book-like), PDF keeps user preference
+  if (state.doc.format === "epub" && state.mode !== "page" && state.mode !== "scroll") {
+    applyMode("page");
+  }
+
   showReader();
   setupViewports();
   el.tocBtn.classList.toggle("is-hidden", state.doc.format !== "epub");
 
   if (state.doc.format === "epub") {
     await loadTOC();
-    await loadEpubChapter(state.epubChapterIndex, { restoreScroll: true });
+    await loadEpubChapter(state.epubChapterIndex, {
+      restorePage: state.epubPage,
+      restoreScroll: state.mode === "scroll",
+    });
   } else if (state.mode === "scroll") {
     await reloadScroll(true);
     restoreScroll(state.doc.lastScroll);
@@ -559,12 +679,22 @@ function setupViewports() {
 async function closeReader() {
   if (hasWails() && state.doc) {
     try {
-      await api().SaveProgress(
-        state.doc.format === "epub"
-          ? state.epubChapterIndex
-          : state.doc.pageIndex || 0,
-        currentScrollRatio()
-      );
+      if (state.doc.format === "epub") {
+        recomputeGlobalPages();
+        await api().SaveProgress(
+          state.globalPage,
+          state.epubChapterIndex,
+          state.epubPage,
+          currentScrollRatio()
+        );
+      } else {
+        await api().SaveProgress(
+          state.doc.pageIndex || 0,
+          0,
+          0,
+          currentScrollRatio()
+        );
+      }
       await api().CloseDocument();
     } catch (_) {}
   }
@@ -669,7 +799,7 @@ async function renderPage() {
     if (!page) return;
     await presentPage(page);
     updateChromeMeta();
-    scheduleProgress(page.pageIndex, 0);
+    scheduleProgress();
     prefetchAround(page.pageIndex);
   } catch (err) {
     toast(String(err?.message || err), true);
@@ -739,7 +869,7 @@ async function goRelative(dir) {
     const slot = el.scrollViewport.querySelector(`[data-page="${next}"]`);
     slot?.scrollIntoView({ behavior: "smooth", block: "start" });
     updateChromeMeta();
-    scheduleProgress(next, currentScrollRatio());
+    scheduleProgress();
     prefetchAround(next);
     return;
   }
@@ -808,7 +938,7 @@ function onScrollViewport() {
   }
   // During zoom, keep the same page — scroll geometry changes briefly
   if (state.zoomLockPage) {
-    scheduleProgress(state.doc?.pageIndex || 0, currentScrollRatio());
+    scheduleProgress();
     return;
   }
   let best = state.doc?.pageIndex || 0;
@@ -829,7 +959,7 @@ function onScrollViewport() {
     updateChromeMeta();
     prefetchAround(best);
   }
-  scheduleProgress(best, currentScrollRatio());
+  scheduleProgress();
 }
 
 // ─── EPUB: chapters + page/scroll ────────────────────────────
@@ -883,31 +1013,39 @@ async function loadEpubChapter(index, opts = {}) {
     el.epubContent.innerHTML = ch.html || "<p>(Empty chapter)</p>";
     state.epubChapterIndex = ch.index;
     state.doc.chapterCount = ch.chapterCount;
-    state.doc.pageCount = ch.chapterCount;
     highlightTOC();
     wireEpubInteractions();
+
     if (state.mode === "page") {
-      requestAnimationFrame(() => {
-        layoutEpubPages();
-        if (opts.atEnd) setEpubPage(Math.max(0, state.epubPageCount - 1));
-        else if (opts.restoreScroll && state.doc.lastScroll) {
-          setEpubPage(
-            Math.round(state.doc.lastScroll * Math.max(0, state.epubPageCount - 1))
-          );
-        } else setEpubPage(0);
-        if (opts.fragment) {
-          const target = el.epubContent.querySelector(
-            `#${CSS.escape(opts.fragment)}, a[name="${CSS.escape(opts.fragment)}"]`
-          );
-          // best-effort: stay on page 0 if can't map
-          if (target) {
-            // reflow page containing element is hard; scroll mode better for fragments
-          }
-        }
-      });
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      layoutEpubPages();
+      let page = 0;
+      if (opts.atEnd) page = Math.max(0, state.epubPageCount - 1);
+      else if (typeof opts.restorePage === "number") {
+        page = Math.min(
+          Math.max(0, opts.restorePage),
+          Math.max(0, state.epubPageCount - 1)
+        );
+      } else if (opts.keepPage) {
+        page = Math.min(state.epubPage, Math.max(0, state.epubPageCount - 1));
+      }
+      setEpubPage(page);
+      if (opts.fragment) {
+        // page mode: jump to chapter page 0 of fragment chapter is fine
+      }
     } else {
-      el.epubBook.scrollTop = 0;
+      el.epubContent.style.transform = "none";
       if (opts.restoreScroll) restoreScroll(state.doc.lastScroll);
+      else el.epubBook.scrollTop = 0;
+      // Approximate page from scroll after layout
+      state.epubPageCount = Math.max(
+        1,
+        Math.ceil(
+          (el.epubContent.scrollHeight || 1) /
+            Math.max(1, el.epubBook.clientHeight)
+        )
+      );
+      state.chapterPageCounts[state.epubChapterIndex] = state.epubPageCount;
       if (opts.fragment) {
         requestAnimationFrame(() => {
           const target = el.epubContent.querySelector(
@@ -918,7 +1056,7 @@ async function loadEpubChapter(index, opts = {}) {
       }
     }
     updateChromeMeta();
-    scheduleProgress(ch.index, 0);
+    scheduleProgress();
   } catch (err) {
     toast(String(err?.message || err), true);
   } finally {
@@ -950,13 +1088,13 @@ function layoutEpubPages() {
   void content.offsetHeight;
   const totalH = content.scrollHeight;
   state.epubPageCount = Math.max(1, Math.ceil(totalH / pageH - 0.001));
+  state.chapterPageCounts[state.epubChapterIndex] = state.epubPageCount;
   if (state.epubPage >= state.epubPageCount) {
     state.epubPage = state.epubPageCount - 1;
   }
-  // Store page height for setEpubPage
   state.epubPageHeight = pageH;
   state.epubPageWidth = pageW;
-  setEpubPage(state.epubPage);
+  recomputeGlobalPages();
   syncGuideWidth();
 }
 
@@ -968,7 +1106,7 @@ function setEpubPage(n) {
   content.style.transition = "transform 200ms cubic-bezier(0.22,1,0.36,1)";
   content.style.transform = `translateY(${-state.epubPage * pageH}px)`;
   updateChromeMeta();
-  scheduleProgress(state.epubChapterIndex, currentScrollRatio());
+  scheduleProgress();
 }
 
 function wireEpubInteractions() {
@@ -1208,36 +1346,60 @@ function bindEvents() {
   // Prevent accidental page changes while zooming with wheel+ctrl
   el.fontMenu?.addEventListener("click", (e) => {
     e.stopPropagation();
-    el.fontPanel.classList.toggle("is-hidden");
+    const opening = el.fontPanel.classList.contains("is-hidden");
     el.guidePanel.classList.add("is-hidden");
-    el.tocPanel.classList.add("is-hidden");
+    if (opening) {
+      el.fontPanel.classList.remove("is-hidden");
+      showChromeBriefly();
+    } else {
+      el.fontPanel.classList.add("is-hidden");
+    }
   });
   el.tocBtn?.addEventListener("click", (e) => {
     e.stopPropagation();
-    el.tocPanel.classList.toggle("is-hidden");
+    const opening = el.tocPanel.classList.contains("is-hidden");
     el.fontPanel.classList.add("is-hidden");
     el.guidePanel.classList.add("is-hidden");
-    // prevent chrome auto-hide from stealing focus while browsing chapters
-    showChromeBriefly();
+    if (opening) {
+      el.tocPanel.classList.remove("is-hidden");
+      showChromeBriefly();
+    } else {
+      el.tocPanel.classList.add("is-hidden");
+    }
   });
   el.tocClose?.addEventListener("click", (e) => {
     e.stopPropagation();
     el.tocPanel.classList.add("is-hidden");
   });
-  // Scrolling the chapter list must not close it
-  el.tocPanel?.addEventListener("wheel", (e) => e.stopPropagation(), {
-    passive: true,
+  // Keep panels alive while hovering / scrolling them
+  [el.fontPanel, el.guidePanel, el.tocPanel].forEach((p) => {
+    p?.addEventListener("mouseenter", () => {
+      cancelChromeHide();
+      showChromeBriefly();
+    });
+    p?.addEventListener("mouseleave", () => {
+      // only schedule chrome hide if panel still open and mouse left entirely
+      if (!anyPanelOpen()) scheduleHideChrome();
+    });
+    p?.addEventListener("pointerdown", (e) => e.stopPropagation());
+    p?.addEventListener("wheel", (e) => e.stopPropagation(), { passive: true });
   });
   el.tocList?.addEventListener("scroll", (e) => e.stopPropagation());
-  el.tocPanel?.addEventListener("pointerdown", (e) => e.stopPropagation());
   el.guideBtn?.addEventListener("click", (e) => {
     e.stopPropagation();
     toggleGuide();
+    showChromeBriefly();
   });
   el.guideSettingsBtn?.addEventListener("click", (e) => {
     e.stopPropagation();
-    el.guidePanel.classList.toggle("is-hidden");
+    const opening = el.guidePanel.classList.contains("is-hidden");
     el.fontPanel.classList.add("is-hidden");
+    if (opening) {
+      el.guidePanel.classList.remove("is-hidden");
+      showChromeBriefly();
+    } else {
+      el.guidePanel.classList.add("is-hidden");
+    }
   });
 
   el.guideHeight?.addEventListener("input", () => {
@@ -1295,21 +1457,35 @@ function bindEvents() {
   setupDragPan(el.epubPages);
 
   // Edge hotspots only — do NOT show chrome on content click or general move
-  el.hotspotTop?.addEventListener("mouseenter", showChromeBriefly);
-  el.hotspotBottom?.addEventListener("mouseenter", showChromeBriefly);
-  const chromeLeave = () => setTimeout(() => hideChrome(), 500);
+  el.hotspotTop?.addEventListener("mouseenter", () => {
+    cancelChromeHide();
+    showChromeBriefly();
+  });
+  el.hotspotBottom?.addEventListener("mouseenter", () => {
+    cancelChromeHide();
+    showChromeBriefly();
+  });
   el.reader
     ?.querySelector(".reader-chrome--top")
-    ?.addEventListener("mouseleave", chromeLeave);
+    ?.addEventListener("mouseenter", cancelChromeHide);
   el.reader
     ?.querySelector(".reader-chrome--bottom")
-    ?.addEventListener("mouseleave", chromeLeave);
-  // Keep chrome while hovering panels attached to it
-  [el.fontPanel, el.guidePanel, el.tocPanel].forEach((p) => {
-    p?.addEventListener("mouseenter", showChromeBriefly);
-  });
+    ?.addEventListener("mouseenter", cancelChromeHide);
+  el.reader
+    ?.querySelector(".reader-chrome--top")
+    ?.addEventListener("mouseleave", (e) => {
+      // Moving into a panel should not hide chrome
+      if (e.relatedTarget?.closest?.(".font-panel, .guide-panel, .toc-panel")) {
+        cancelChromeHide();
+        return;
+      }
+      scheduleHideChrome();
+    });
+  el.reader
+    ?.querySelector(".reader-chrome--bottom")
+    ?.addEventListener("mouseleave", () => scheduleHideChrome());
 
-  // Content click: hide chrome, do not toggle back
+  // Content click: hide chrome + popovers (not TOC drawer unless desired)
   el.stage?.addEventListener("click", (e) => {
     if (
       e.target.closest(".edge-nav") ||
@@ -1322,16 +1498,16 @@ function bindEvents() {
       e.target.closest("img")
     )
       return;
-    hideChrome();
     el.fontPanel.classList.add("is-hidden");
     el.guidePanel.classList.add("is-hidden");
+    hideChrome();
   });
 
   // NO mousemove bumpChrome on stage
 
   el.epubBook?.addEventListener("scroll", () => {
     if (state.mode === "scroll") {
-      scheduleProgress(state.epubChapterIndex, currentScrollRatio());
+      scheduleProgress();
     }
   });
 

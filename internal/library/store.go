@@ -36,10 +36,12 @@ type Book struct {
 	Path         string    `json:"path"`
 	Title        string    `json:"title"`
 	Format       Format    `json:"format"`
-	PageCount    int       `json:"pageCount"`
-	LastPage     int       `json:"lastPage"`     // 0-based for PDF; spine index for EPUB
-	LastScroll   float64   `json:"lastScroll"`   // 0–1 progress (scroll mode / EPUB)
-	FileSize     int64     `json:"fileSize"`
+	PageCount    int     `json:"pageCount"`
+	LastPage     int     `json:"lastPage"`     // PDF: page index; EPUB: global page index (0-based)
+	LastChapter  int     `json:"lastChapter"`  // EPUB spine index (fast restore)
+	LastSubPage  int     `json:"lastSubPage"`  // EPUB page within chapter (0-based)
+	LastScroll   float64 `json:"lastScroll"`   // 0–1 scroll ratio (scroll mode)
+	FileSize     int64   `json:"fileSize"`
 	ModTimeUnix  int64     `json:"modTimeUnix"`
 	Fingerprint  string    `json:"fingerprint"` // hash of first 64KiB
 	AddedAtUnix  int64  `json:"addedAtUnix"`
@@ -192,13 +194,15 @@ func (s *Store) Upsert(book Book) (Book, error) {
 	return book, s.saveLocked()
 }
 
-// UpdateProgress saves last page / scroll for a book.
-func (s *Store) UpdateProgress(id string, lastPage int, lastScroll float64) error {
+// UpdateProgress saves reading position for a book.
+func (s *Store) UpdateProgress(id string, lastPage, lastChapter, lastSubPage int, lastScroll float64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i, b := range s.data.Books {
 		if b.ID == id {
 			s.data.Books[i].LastPage = lastPage
+			s.data.Books[i].LastChapter = lastChapter
+			s.data.Books[i].LastSubPage = lastSubPage
 			s.data.Books[i].LastScroll = lastScroll
 			s.data.Books[i].OpenedAtUnix = time.Now().Unix()
 			return s.saveLocked()
