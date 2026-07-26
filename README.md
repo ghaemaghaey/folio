@@ -1,140 +1,255 @@
 # Folio
 
-A calm, beautiful desktop reading app for **Windows** and **Linux**.
+**A calm, open-source desktop reader for Windows and Linux.**
 
-Folio is inspired by [ReadEra](https://readera.org/) and modern reading apps (Thorium, Apple Books): distraction-free pages, paper-like themes, and typography that feels intentional — not a utility chrome shell around a PDF widget.
+Folio is a distraction-free app for reading PDFs and EPUBs — built because good reading software should feel like a book, not a browser tab full of toolbars.
 
-> **Current:** styled library shelf, PDF (page/scroll + zoom), EPUB reflow, last-position memory, missing/replaced remap, Persian (Rastikerdar) & English reading fonts.
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go)](https://go.dev/)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey)](#install)
+[![CI](https://github.com/OWNER/folio/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/folio/actions/workflows/ci.yml)
 
-![License](https://img.shields.io/badge/license-MIT-blue)
-![Go](https://img.shields.io/badge/go-1.22+-00ADD8)
-![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey)
+> Replace `OWNER` in the badge URLs with your GitHub username or org after you push the repo.
 
-## Why Folio looks the way it does
+---
 
-UI/UX quality is the primary success metric.
+## Why this project exists
 
-| Principle | How we apply it |
+Most desktop “readers” fall into one of two traps:
+
+1. **Feature-heavy but ugly** — every setting visible at once, chrome fighting the page.
+2. **Pretty on mobile only** — tools like ReadEra on Android nail calm UI; the desktop world still often feels like a PDF utility.
+
+**Folio** started as an answer to that gap:
+
+- Treat **UI/UX quality** as the main goal, not an afterthought.
+- Give readers **paper-like themes**, real typography (including Persian fonts), and chrome that **gets out of the way**.
+- Ship a **native, open-source** app for Windows and Linux with a stack that is pleasant to build and package (Go + Wails, PDF via PDFium/WASM — no CGO required for the default path).
+
+In short: **a small, serious reading app you can trust with long sessions — and fork freely.**
+
+---
+
+## What it does
+
+| Feature | Description |
 | --- | --- |
-| **Distraction-free by default** | Reader chrome auto-hides; tap/hover or move the mouse to reveal |
-| **Typography first** | Display face (Fraunces) + UI face (Inter); real sepia / light / dark tokens |
-| **Paper, not “inverted colors”** | Sepia uses warm cream and brown ink; dark uses soft charcoal, not pure black |
-| **One design system** | Spacing scale, radii, motion, and a single SVG icon language |
-| **Native where it helps** | OS file dialogs and window chrome via Wails; custom reading surface |
+| **PDF reading** | Render pages with [go-pdfium](https://github.com/klippa-app/go-pdfium) (WebAssembly / Wazero). Page mode or continuous scroll. |
+| **EPUB reading** | Full-book continuous vertical scroll; chapters list for jumping. |
+| **Bookshelf** | Remembers books you’ve opened; cover thumbs for PDFs; missing/replaced file remap. |
+| **Last position** | Restores where you left off (page / scroll) per book. |
+| **Zoom** | CSS zoom on PDF bitmaps (no re-render thrash); font scale on EPUB. |
+| **Themes** | Sepia, light, and dark — tuned paper tones, not raw invert-only. PDF page filters follow the theme. |
+| **Fonts** | English reading faces + Saber Rastikerdar Persian fonts (Vazirmatn, Samim, Shabnam, …). |
+| **Reading guide** | Optional screen-fixed leading line (height / hue / lock). |
+| **Distraction-free chrome** | Header/footer appear on edge hover or `M`; panels stay open while you use them. |
+
+**Not (yet):** cloud sync, annotations store UI, full TOC search, DRM, macOS package (contributions welcome).
+
+---
+
+## Screenshots
+
+_Add screenshots here after release (`docs/screenshots/`)._
+
+---
+
+## Install
+
+### Prebuilt binaries (recommended)
+
+1. Open **[Releases](https://github.com/OWNER/folio/releases)** on GitHub.
+2. Download for your OS:
+   - **Windows:** `folio-windows-amd64.exe` (or the zip from the release)
+   - **Linux:** `folio-linux-amd64`
+3. Run the binary (Linux: `chmod +x folio-linux-amd64`).
+
+Windows builds are linked as a **GUI app** (no console window).
+
+### Build from source
+
+**Requirements**
+
+- [Go](https://go.dev/dl/) 1.22+
+- Optional: [Wails CLI](https://wails.io) v2 for `wails build` / `wails dev`
+- Linux: WebKitGTK / GTK deps (see [Wails installation](https://wails.io/docs/gettingstarted/installation))
+
+```bash
+git clone https://github.com/OWNER/folio.git
+cd folio
+
+# Windows (no console window)
+go build -tags production -ldflags "-s -w -H windowsgui" -o build/bin/folio.exe .
+
+# Linux
+go build -tags production -ldflags "-s -w" -o build/bin/folio .
+```
+
+Or with Wails:
+
+```bash
+wails build
+# output under build/bin/
+```
+
+**Important:** always use `-tags production` (or `wails build`). Plain `go build` / `go run` without tags shows a Wails error dialog.
+
+---
+
+## Usage (quick)
+
+| Action | How |
+| --- | --- |
+| Open a book | **Open book** — PDF or EPUB |
+| Hide / show chrome | Move to top/bottom edge, or press **`M`** |
+| Page / scroll (PDF) | Toolbar toggle or **`S`** |
+| Zoom | **`+` / `-`**, toolbar, or Ctrl+wheel |
+| Themes | Theme control or **`T`** |
+| Chapters (EPUB) | List icon or **`C`** |
+| Reading guide | Guide icon or **`G`** |
+| Back to shelf | Back arrow or **Esc** (when panels closed) |
+
+Data is stored under your home directory:
+
+- **Library / progress:** `~/.folio/library.json` (Windows: `%USERPROFILE%\.folio\library.json`)
+- **PDF page cache:** `~/.folio/cache/pdf/`
+
+---
 
 ## Stack
 
-| Layer | Choice |
+| Layer | Technology |
 | --- | --- |
 | Desktop shell | [Wails v2](https://wails.io) (Go + HTML/CSS/JS) |
-| PDF | [go-pdfium](https://github.com/klippa-app/go-pdfium) **WebAssembly (Wazero)** — no CGO |
-| Frontend | Plain HTML/CSS/JS with design tokens (no heavy UI kit) |
-| License | **MIT** |
+| PDF | [go-pdfium](https://github.com/klippa-app/go-pdfium) WASM (Wazero) — no CGO by default |
+| EPUB | Custom zip/OPF/XHTML parser + reflow in the webview |
+| UI | Design tokens, plain CSS/JS (no heavy component library) |
+| License | [MIT](LICENSE) |
+
+---
 
 ## Project layout
 
 ```
 folio/
 ├── main.go                 # Wails entry
-├── app.go                  # Bound methods (open PDF, render page, navigate)
-├── internal/pdf/           # go-pdfium WASM renderer
-├── frontend/dist/          # Styled UI (assets embedded as-is)
-│   ├── index.html
-│   ├── tokens.css          # Themes + spacing + type
-│   ├── style.css
-│   └── main.js
-├── build/appicon.png
-├── wails.json
+├── app.go                  # Go ↔ UI bindings
+├── internal/
+│   ├── pdf/                # PDFium session + memory/disk cache
+│   ├── epub/               # EPUB parse, TOC, chapters
+│   └── library/            # Shelf + last-read store
+├── frontend/dist/          # Embedded UI
+├── .github/workflows/      # CI + release
+├── scripts/build.ps1
+├── Makefile
 ├── LICENSE
 └── README.md
 ```
 
-## Prerequisites
+---
 
-- **Go** 1.22+
-- **Wails CLI** v2 (`go install github.com/wailsapp/wails/v2/cmd/wails@latest`)
-- Platform webview deps (see [Wails platform guide](https://wails.io/docs/gettingstarted/installation))
-  - Windows: WebView2 (usually preinstalled on Win10/11)
-  - Linux: `libgtk-3`, `libwebkit2gtk` (distro packages vary)
-
-No CGO and no system PDFium install are required for the WASM backend.
-
-## Develop
-
-**Always use the Wails CLI** (or pass the correct Go build tags). A plain `go build` / `go run` without tags will show:
-
-> *Wails applications will not build without the correct build tags.*
+## Development
 
 ```bash
-# from repo root — hot reload (uses -tags dev)
+# Hot reload (needs Wails CLI + platform webview deps)
 wails dev
+
+# Or build production binary on the same OS you target
+make build-go          # Windows Makefile target uses windowsgui
+# Linux:
+go build -tags production -ldflags "-s -w" -o build/bin/folio .
 ```
 
-Release binary **on the target OS** (native builds only for this project):
+Frontend lives in `frontend/dist/` and is embedded as-is (no npm build step required).
+
+---
+
+## Release with GitHub Actions + GitHub CLI
+
+### Automated releases (tags)
+
+Pushing a version tag runs the **Release** workflow, which builds Windows and Linux binaries and uploads them to a GitHub Release:
 
 ```bash
-# Windows or Linux
-wails build
+# After commits are on the default branch:
+git tag v0.6.0
+git push origin v0.6.0
 ```
 
-Output: `build/bin/folio` (or `folio.exe` on Windows).
+Workflow: [`.github/workflows/release.yml`](.github/workflows/release.yml)
 
-### Manual `go build` (if you must)
+Artifacts typically include:
 
-Wails selects platform code with build tags. You need **one** of:
+- `folio-windows-amd64.exe`
+- `folio-linux-amd64`
+- checksums (`SHA256SUMS`)
 
-| Tag | When |
+### Manual publish with GitHub CLI (`gh`)
+
+Install [GitHub CLI](https://cli.github.com/), then:
+
+```bash
+# Login once
+gh auth login
+
+# Create repo (first time only)
+gh repo create folio --public --source=. --remote=origin --push
+
+# After a tag + successful Actions run, or after local builds:
+# Build locally first, then:
+gh release create v0.6.0 \
+  ./build/bin/folio-windows-amd64.exe \
+  ./build/bin/folio-linux-amd64 \
+  --title "Folio v0.6.0" \
+  --notes "Calm desktop reader — PDF & EPUB."
+```
+
+Local multi-artifact helper (from repo root, on Windows you mainly produce the `.exe`; Linux binary is produced in CI):
+
+```powershell
+# Windows host
+go build -tags production -ldflags "-s -w -H windowsgui" -o build/bin/folio-windows-amd64.exe .
+gh release create v0.6.0 ./build/bin/folio-windows-amd64.exe --generate-notes
+```
+
+---
+
+## Design principles
+
+| Principle | Practice |
 | --- | --- |
-| `production` | Shipping / normal run of embedded assets |
-| `dev` | Development (what `wails dev` uses) |
+| Distraction-free by default | Chrome hides; reading surface first |
+| Typography first | Reading fonts + careful themes |
+| Paper, not gimmicks | Warm sepia / soft dark, not pure black invert alone |
+| One design system | Shared spacing, color tokens, icons |
+| Open and portable | MIT, native builds per OS, WASM PDF path |
 
-```bash
-# Windows
-go build -tags production -o build/bin/folio.exe .
+---
 
-# Linux
-go build -tags production -o build/bin/folio .
-```
+## Contributing
 
-Do **not** run `go build .` or `go run .` without `-tags production` or `-tags dev`.
+Issues and PRs are welcome. Useful areas:
 
-### Frontend-only preview
+- macOS packaging  
+- Bookmarks / highlights  
+- In-document search & richer TOC  
+- Faster first EPUB open for huge files  
+- Screenshots and translations  
 
-Open `frontend/dist/index.html` in a browser to review layout and themes. PDF open requires the Wails shell.
+Please keep UI changes consistent with the existing design tokens in `frontend/dist/tokens.css`.
 
-## Using the app
-
-1. Launch Folio — welcome screen, or your **shelf** of previously opened books.
-2. **Open book** — PDF or EPUB (native file dialog).
-3. **Resume** — Folio reopens at the last page/chapter.
-4. **Page vs scroll** — toggle in the reader chrome (or press `S` for PDF).
-5. **Zoom** — `+` / `-`, toolbar buttons, or Ctrl+wheel.
-6. **Fonts** — Aa menu: Literata, Source Serif, Merriweather, IBM Plex Serif, Georgia + Vazirmatn, Samim, Shabnam, Sahel, Tanha, Parastoo, Gandom (Saber Rastikerdar).
-7. **Missing/replaced files** — shelf card greys out with label; **Map file…** rebinds the path.
-8. **Themes:** Sepia → Light → Dark (`T`). Chrome auto-hides while reading.
-
-## Design tokens (quick reference)
-
-Defined in `frontend/dist/tokens.css`:
-
-- **Spacing:** 4 → 8 → 12 → 16 → 24 → 32 → 48 → 64 (`--space-1` … `--space-8`)
-- **Themes:** `sepia` (default), `light`, `dark`
-- **Type:** UI = Inter; display/reading = Fraunces
-
-## Roadmap (later phases)
-
-- [x] Shelf of opened books + last-read position
-- [x] Missing / replaced file detection + remap
-- [x] Page / scroll modes + zoom
-- [x] EPUB reflowable chapters
-- [x] Persian (Rastikerdar) + English reading fonts
-- [ ] Folder scan for new books
-- [ ] Bookmarks & highlights
-- [ ] TOC, in-document search
-- [ ] Smoother PDF page cache / virtualized scroll
+---
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+[MIT](LICENSE) © Folio contributors.
 
-PDFium (via go-pdfium) and Wazero are Apache-2.0; their terms apply to those components.
+Third-party components (PDFium via go-pdfium, Wazero, fonts) keep their own licenses (typically Apache-2.0 / OFL). See upstream projects for details.
+
+---
+
+## Acknowledgments
+
+- Inspired by **ReadEra**, **Thorium**, and other calm reading apps  
+- Persian type by **Saber Rastikerdar** (Vazirmatn and related families)  
+- Built with **Wails** and **go-pdfium**
