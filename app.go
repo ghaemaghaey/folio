@@ -102,18 +102,29 @@ func (a *App) libOrNil() *library.Store {
 	return a.lib
 }
 
-// ensureRenderer lazily starts go-pdfium (WASM). Safe to call often.
+// ensureRenderer lazily starts go-pdfium (WASM). Never holds a.mu during WASM init
+// (that blocked every UI call and made open/startup feel frozen).
 func (a *App) ensureRenderer() error {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	if a.renderer != nil {
+		a.mu.Unlock()
 		return nil
 	}
+	a.mu.Unlock()
+
 	r, err := pdf.NewRenderer()
 	if err != nil {
 		return fmt.Errorf("pdfium init: %w", err)
 	}
-	a.renderer = r
+
+	a.mu.Lock()
+	if a.renderer == nil {
+		a.renderer = r
+	} else {
+		// Another goroutine won the race — drop ours
+		_ = r.Close()
+	}
+	a.mu.Unlock()
 	return nil
 }
 
@@ -368,14 +379,15 @@ func (a *App) openPDF(path string, existingID string) (*DocumentInfo, error) {
 	}
 	lib := a.libOrNil()
 
+	// Snapshot renderer without holding a.mu during Open/Render (those are slow).
 	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	if a.renderer == nil {
+	renderer := a.renderer
+	a.mu.Unlock()
+	if renderer == nil {
 		return nil, fmt.Errorf("PDF engine is not ready")
 	}
 
-	count, err := a.renderer.Open(path)
+	count, err := renderer.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open PDF: %w", err)
 	}
@@ -397,7 +409,6 @@ func (a *App) openPDF(path string, existingID string) (*DocumentInfo, error) {
 		Fingerprint: meta.Fingerprint,
 	}
 
-	// Preserve last page when reopening known book
 	lastPage := 0
 	lastScroll := 0.0
 	if lib != nil {
@@ -426,7 +437,6 @@ func (a *App) openPDF(path string, existingID string) (*DocumentInfo, error) {
 		if lastPage < 0 {
 			lastPage = 0
 		}
-		// Upsert preserves library progress fields.
 		saved, err := lib.Upsert(book)
 		if err != nil {
 			runtime.LogWarningf(a.ctx, "library upsert: %v", err)
@@ -437,17 +447,10 @@ func (a *App) openPDF(path string, existingID string) (*DocumentInfo, error) {
 		}
 	}
 
-	// Thumbnail cover from page 0 (best-effort)
-	if lib != nil && book.CoverDataURL == "" {
-		if cover, _, _, err := a.renderer.RenderPage(path, 0, 48); err == nil {
-			book.CoverDataURL = cover
-			if saved, err := lib.Upsert(book); err == nil {
-				book = saved
-				lastPage = book.LastPage
-				lastScroll = book.LastScroll
-			}
-		}
-	}
+	// Cover is optional — never block open on thumbnail render.
+	// Generate in background after the document is registered.
+	needCover := lib != nil && book.CoverDataURL == ""
+	bookID := book.ID
 
 	if lastPage >= count {
 		lastPage = count - 1
@@ -456,6 +459,7 @@ func (a *App) openPDF(path string, existingID string) (*DocumentInfo, error) {
 		lastPage = 0
 	}
 
+	a.mu.Lock()
 	a.epubBook = nil
 	a.openDoc = &openDocument{
 		ID:        book.ID,
@@ -464,6 +468,22 @@ func (a *App) openPDF(path string, existingID string) (*DocumentInfo, error) {
 		Format:    library.FormatPDF,
 		PageCount: count,
 		PageIndex: lastPage,
+	}
+	a.mu.Unlock()
+
+	if needCover && bookID != "" {
+		go func(p, id string) {
+			cover, _, _, err := renderer.RenderPage(p, 0, 48)
+			if err != nil || cover == "" || lib == nil {
+				return
+			}
+			b, ok := lib.Get(id)
+			if !ok || b.CoverDataURL != "" {
+				return
+			}
+			b.CoverDataURL = cover
+			_, _ = lib.Upsert(b)
+		}(path, bookID)
 	}
 
 	return &DocumentInfo{
@@ -583,33 +603,16 @@ func (a *App) openEPUB(path string, existingID string) (*DocumentInfo, error) {
 
 // RenderCurrentPage renders the active PDF page at dpi (zoom applied by caller via dpi).
 func (a *App) RenderCurrentPage(dpi int) (*PageImage, error) {
-	if err := a.ensureRenderer(); err != nil {
-		return nil, err
+	if dpi <= 0 {
+		dpi = 128
 	}
 	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	if a.openDoc == nil || a.openDoc.Format != library.FormatPDF {
-		return nil, fmt.Errorf("no PDF open")
+	idx := 0
+	if a.openDoc != nil {
+		idx = a.openDoc.PageIndex
 	}
-	if a.renderer == nil {
-		return nil, fmt.Errorf("PDF engine is not ready")
-	}
-	if dpi <= 0 {
-		dpi = 144
-	}
-
-	img, w, h, err := a.renderer.RenderPage(a.openDoc.Path, a.openDoc.PageIndex, dpi)
-	if err != nil {
-		return nil, err
-	}
-	return &PageImage{
-		DataURL:   img,
-		PageIndex: a.openDoc.PageIndex,
-		PageCount: a.openDoc.PageCount,
-		Width:     w,
-		Height:    h,
-	}, nil
+	a.mu.Unlock()
+	return a.renderPDFPage(idx, dpi, true)
 }
 
 // RenderPDFPage renders an arbitrary PDF page (for scroll mode).

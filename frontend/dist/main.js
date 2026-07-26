@@ -591,10 +591,16 @@ async function remapBook(id) {
 }
 async function openBookId(id) {
   try {
+    toast("Opening…");
     const doc = await api().OpenBook(id);
-    if (doc) await enterDocument(doc);
+    if (!doc) {
+      toast("Could not open book.", true);
+      return;
+    }
+    await enterDocument(doc);
   } catch (err) {
-    toast(String(err?.message || err), true);
+    console.error("OpenBook", err);
+    toast(String(err?.message || err || "Open failed"), true);
     refreshShelf();
   }
 }
@@ -612,56 +618,69 @@ async function openFile() {
 }
 
 async function enterDocument(doc) {
+  if (!doc) return;
+
+  // Normalize fields (Wails may use either casing)
+  const format = String(doc.format || doc.Format || "pdf").toLowerCase();
+  const pageCount = doc.pageCount ?? doc.PageCount ?? 1;
+  const pageIndex = doc.pageIndex ?? doc.PageIndex ?? 0;
+
+  state.rendering = false; // never block a new open because a prior load stuck
   state.doc = {
-    id: doc.id,
-    path: doc.path,
-    title: doc.title,
-    format: doc.format || "pdf",
-    pageCount: doc.pageCount,
-    chapterCount: doc.pageCount,
-    pageIndex: doc.pageIndex || 0,
-    lastScroll: doc.lastScroll || 0,
+    id: doc.id || doc.ID || "",
+    path: doc.path || doc.Path || "",
+    title: doc.title || doc.Title || "Document",
+    format,
+    pageCount,
+    chapterCount: pageCount,
+    pageIndex,
+    lastScroll: doc.lastScroll ?? doc.LastScroll ?? 0,
     lastChapter: doc.lastChapter ?? doc.LastChapter ?? 0,
     lastSubPage: doc.lastSubPage ?? doc.LastSubPage ?? 0,
   };
   state.scrollLoaded = new Set();
   state.clientCache.clear();
   state.chapterPageCounts = {};
-  state.globalPage = doc.pageIndex || 0;
-  state.globalPageTotal = Math.max(1, doc.pageCount || 1);
+  state.globalPage = pageIndex;
+  state.globalPageTotal = Math.max(1, pageCount);
 
   state.epubChapterIndex = state.doc.lastChapter || 0;
   state.epubPage = state.doc.lastSubPage || 0;
 
   showReader();
   setupViewports();
-  el.tocBtn.classList.toggle("is-hidden", state.doc.format !== "epub");
-  // Mode toggle is for PDF only — EPUB is always continuous full-book scroll
-  el.modeToggle?.classList.toggle("is-hidden", state.doc.format === "epub");
+  el.tocBtn.classList.toggle("is-hidden", format !== "epub");
+  el.modeToggle?.classList.toggle("is-hidden", format === "epub");
 
-  if (state.doc.format === "epub") {
-    await loadTOC();
-    await loadEpubContinuous({
-      restoreScroll: state.doc.lastScroll || 0,
-      restoreChapter: state.epubChapterIndex,
-    });
-  } else if (state.mode === "scroll") {
-    await reloadScroll(true);
-    // Jump to last-read PDF page, then restore fine scroll if any
-    const slot = el.scrollViewport.querySelector(
-      `[data-page="${state.doc.pageIndex}"]`
-    );
-    if (slot) {
-      slot.scrollIntoView({ block: "start", behavior: "auto" });
+  try {
+    if (format === "epub") {
+      await loadTOC();
+      await loadEpubContinuous({
+        restoreScroll: state.doc.lastScroll || 0,
+        restoreChapter: state.epubChapterIndex,
+      });
+    } else {
+      // PDF — ensure page viewports are visible
+      el.epubViewport?.classList.add("is-hidden");
+      if (state.mode === "scroll") {
+        el.pageViewport?.classList.add("is-hidden");
+        el.scrollViewport?.classList.remove("is-hidden");
+        await reloadScroll(true);
+        const slot = el.scrollViewport.querySelector(
+          `[data-page="${state.doc.pageIndex}"]`
+        );
+        slot?.scrollIntoView({ block: "start", behavior: "auto" });
+        if (state.doc.lastScroll > 0.02) restoreScroll(state.doc.lastScroll);
+      } else {
+        el.scrollViewport?.classList.add("is-hidden");
+        el.pageViewport?.classList.remove("is-hidden");
+        await renderPage();
+      }
+      prefetchAround(state.doc.pageIndex);
     }
-    if (state.doc.lastScroll > 0.02) {
-      // minor offset within continuous view
-      restoreScroll(state.doc.lastScroll);
-    }
-    prefetchAround(state.doc.pageIndex);
-  } else {
-    await renderPage();
-    prefetchAround(state.doc.pageIndex);
+  } catch (err) {
+    console.error("enterDocument failed", err);
+    toast(String(err?.message || err || "Could not open document"), true);
   }
   updateChromeMeta();
   syncGuideWidth();
@@ -669,16 +688,22 @@ async function enterDocument(doc) {
 
 function setupViewports() {
   const isEpub = state.doc?.format === "epub";
-  el.epubViewport.classList.toggle("is-hidden", !isEpub);
-  // EPUB is always continuous scroll (full book)
   if (isEpub) {
-    el.epubViewport.setAttribute("data-mode", "scroll");
-    el.pageViewport.classList.add("is-hidden");
-    el.scrollViewport.classList.add("is-hidden");
+    el.epubViewport?.classList.remove("is-hidden");
+    el.epubViewport?.setAttribute("data-mode", "scroll");
+    el.pageViewport?.classList.add("is-hidden");
+    el.scrollViewport?.classList.add("is-hidden");
     return;
   }
-  el.pageViewport.classList.toggle("is-hidden", state.mode === "scroll");
-  el.scrollViewport.classList.toggle("is-hidden", state.mode !== "scroll");
+  // PDF
+  el.epubViewport?.classList.add("is-hidden");
+  if (state.mode === "scroll") {
+    el.pageViewport?.classList.add("is-hidden");
+    el.scrollViewport?.classList.remove("is-hidden");
+  } else {
+    el.scrollViewport?.classList.add("is-hidden");
+    el.pageViewport?.classList.remove("is-hidden");
+  }
 }
 
 async function closeReader() {
@@ -775,22 +800,35 @@ function prefetchAround(index) {
 }
 
 async function renderPage() {
-  if (!hasWails() || !state.doc || state.doc.format !== "pdf" || state.rendering)
-    return;
+  if (!hasWails() || !state.doc) return;
+  if (state.doc.format !== "pdf") return;
+  // Allow retry even if a previous render was marked busy
+  if (state.rendering) {
+    state.rendering = false;
+  }
   state.rendering = true;
+  el.pageViewport?.classList.remove("is-hidden");
+  el.scrollViewport?.classList.add("is-hidden");
+  el.epubViewport?.classList.add("is-hidden");
   const showSpinner = !state.clientCache.has(cacheKey(state.doc.pageIndex));
-  if (showSpinner) el.pageLoading.hidden = false;
+  if (showSpinner && el.pageLoading) el.pageLoading.hidden = false;
   try {
     const page = await fetchPDFPage(state.doc.pageIndex, { setCurrent: true });
-    if (!page) return;
+    if (!page || !page.dataURL) {
+      toast("PDF page was empty — try reopening the file.", true);
+      return;
+    }
     await presentPage(page);
+    state.doc.pageIndex = page.pageIndex;
+    state.doc.pageCount = page.pageCount;
     updateChromeMeta();
     scheduleProgress();
     prefetchAround(page.pageIndex);
   } catch (err) {
-    toast(String(err?.message || err), true);
+    console.error("renderPage", err);
+    toast(String(err?.message || err || "PDF render failed"), true);
   } finally {
-    el.pageLoading.hidden = true;
+    if (el.pageLoading) el.pageLoading.hidden = true;
     state.rendering = false;
   }
 }
@@ -1993,20 +2031,20 @@ async function boot() {
     el.version.textContent = "Folio · browser preview";
     return;
   }
-  // Defer shelf + version so the window appears first
+  // One deferred shelf load — no long retry loop (keeps startup snappy)
   requestAnimationFrame(() => {
     setTimeout(async () => {
       try {
         const v = await api().AppVersion();
         el.version.textContent = `Folio v${v}`;
       } catch (_) {}
-      // Retry shelf briefly — library may still be opening
-      for (let i = 0; i < 8; i++) {
+      try {
         await refreshShelf();
-        if (el.shelf && !el.shelf.classList.contains("is-hidden")) break;
-        if (el.shelf?.children?.length) break;
-        await new Promise((r) => setTimeout(r, 80));
-      }
+      } catch (_) {}
+      // One gentle retry if library file was still opening
+      setTimeout(() => {
+        refreshShelf().catch(() => {});
+      }, 400);
     }, 0);
   });
 }
