@@ -1014,33 +1014,16 @@ async function loadEpubContinuous(opts = {}) {
     el.epubContent.style.transform = "none";
     el.epubContent.style.height = "auto";
     el.epubContent.style.columns = "auto";
+    lockEpubVerticalOnly();
     clampEpubHorizontalOverflow();
     wireEpubInteractions();
-
-    // Single continuous vertical scroller only
-    el.epubBook.style.overflowX = "hidden";
-    el.epubBook.scrollLeft = 0;
-    el.epubBook.onscroll = onEpubScroll;
-    el.epubBook.addEventListener(
-      "scroll",
-      () => {
-        // Kill accidental horizontal scroll from wide content / trackpads
-        if (el.epubBook.scrollLeft !== 0) el.epubBook.scrollLeft = 0;
-      },
-      { passive: true }
-    );
-    el.epubBook.addEventListener(
-      "wheel",
-      (e) => {
-        // Convert pure horizontal wheel gestures to vertical reading
-        if (Math.abs(e.deltaX) > Math.abs(e.deltaY) && Math.abs(e.deltaX) > 0) {
-          e.preventDefault();
-          el.epubBook.scrollTop += e.deltaX;
-        }
-        if (el.epubBook.scrollLeft !== 0) el.epubBook.scrollLeft = 0;
-      },
-      { passive: false }
-    );
+    // Re-clamp after layout (images load, fonts apply)
+    requestAnimationFrame(() => {
+      clampEpubHorizontalOverflow();
+      lockEpubVerticalOnly();
+    });
+    setTimeout(() => clampEpubHorizontalOverflow(), 300);
+    setTimeout(() => clampEpubHorizontalOverflow(), 1200);
 
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
 
@@ -1084,6 +1067,64 @@ function onEpubScroll() {
 // Kept for link resolution / chapter jumps from internal links
 async function loadEpubChapter(index) {
   jumpToEpubChapter(index);
+}
+
+/** Bind once: only vertical scrolling on the EPUB book surface. */
+function lockEpubVerticalOnly() {
+  const book = el.epubBook;
+  const vp = el.epubViewport;
+  if (!book || book.dataset.folioScrollLock === "1") {
+    if (book) book.scrollLeft = 0;
+    return;
+  }
+  book.dataset.folioScrollLock = "1";
+
+  const killX = () => {
+    if (book.scrollLeft !== 0) book.scrollLeft = 0;
+    if (vp && vp.scrollLeft !== 0) vp.scrollLeft = 0;
+  };
+
+  book.style.overflowX = "hidden";
+  book.style.overflowY = "auto";
+  book.style.touchAction = "pan-y";
+  if (vp) {
+    vp.style.overflowX = "hidden";
+    vp.style.overflowY = "hidden";
+  }
+
+  book.onscroll = (e) => {
+    killX();
+    onEpubScroll();
+  };
+  book.addEventListener(
+    "wheel",
+    (e) => {
+      // Fold horizontal wheel into vertical; never allow X scroll
+      if (e.deltaX !== 0) {
+        e.preventDefault();
+        book.scrollTop += e.deltaX + e.deltaY;
+      }
+      killX();
+    },
+    { passive: false }
+  );
+  book.addEventListener(
+    "touchmove",
+    () => {
+      killX();
+    },
+    { passive: true }
+  );
+  // MutationObserver: re-clamp if content injects wide nodes later
+  if (el.epubContent && !el.epubContent.dataset.folioObserve) {
+    el.epubContent.dataset.folioObserve = "1";
+    const mo = new MutationObserver(() => {
+      clampEpubHorizontalOverflow();
+      killX();
+    });
+    mo.observe(el.epubContent, { childList: true, subtree: true, attributes: true });
+  }
+  killX();
 }
 
 /**
@@ -1183,13 +1224,34 @@ function clampEpubHorizontalOverflow() {
     }
   });
 
-  // Keep scrollers vertical-only
+  // Pin every shell node to the book column width (px), not just %
+  const col = el.epubBook?.clientWidth || el.epubViewport?.clientWidth || 0;
   [el.epubViewport, el.epubBook, el.epubPages, el.epubContent].forEach((n) => {
     if (!n) return;
     n.style.overflowX = "hidden";
     n.style.maxWidth = "100%";
-    if (n === el.epubBook) n.scrollLeft = 0;
+    n.style.minWidth = "0";
+    if (n === el.epubBook) {
+      n.scrollLeft = 0;
+      n.style.overflowY = "auto";
+    }
   });
+  if (col > 40 && el.epubContent) {
+    // Hard pixel cap so % max-width children cannot expand past the column
+    const inner = Math.max(120, col - 2);
+    el.epubPages.style.width = `${inner}px`;
+    el.epubPages.style.maxWidth = `${inner}px`;
+    el.epubContent.style.width = `${inner}px`;
+    el.epubContent.style.maxWidth = `${inner}px`;
+    el.epubContent.querySelectorAll(".epub-chapter, .epub-chapter-body").forEach((sec) => {
+      sec.style.maxWidth = `${inner}px`;
+      sec.style.width = "100%";
+      sec.style.minWidth = "0";
+      sec.style.overflowX = "hidden";
+    });
+  }
+  if (el.epubBook) el.epubBook.scrollLeft = 0;
+  if (el.epubViewport) el.epubViewport.scrollLeft = 0;
 }
 
 function wireEpubInteractions() {
