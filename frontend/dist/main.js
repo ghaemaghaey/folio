@@ -1014,10 +1014,33 @@ async function loadEpubContinuous(opts = {}) {
     el.epubContent.style.transform = "none";
     el.epubContent.style.height = "auto";
     el.epubContent.style.columns = "auto";
+    clampEpubHorizontalOverflow();
     wireEpubInteractions();
 
-    // Single continuous scroller
+    // Single continuous vertical scroller only
+    el.epubBook.style.overflowX = "hidden";
+    el.epubBook.scrollLeft = 0;
     el.epubBook.onscroll = onEpubScroll;
+    el.epubBook.addEventListener(
+      "scroll",
+      () => {
+        // Kill accidental horizontal scroll from wide content / trackpads
+        if (el.epubBook.scrollLeft !== 0) el.epubBook.scrollLeft = 0;
+      },
+      { passive: true }
+    );
+    el.epubBook.addEventListener(
+      "wheel",
+      (e) => {
+        // Convert pure horizontal wheel gestures to vertical reading
+        if (Math.abs(e.deltaX) > Math.abs(e.deltaY) && Math.abs(e.deltaX) > 0) {
+          e.preventDefault();
+          el.epubBook.scrollTop += e.deltaX;
+        }
+        if (el.epubBook.scrollLeft !== 0) el.epubBook.scrollLeft = 0;
+      },
+      { passive: false }
+    );
 
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
 
@@ -1063,7 +1086,37 @@ async function loadEpubChapter(index) {
   jumpToEpubChapter(index);
 }
 
+/** Force EPUB content to stay within the vertical column (no sideways scroll). */
+function clampEpubHorizontalOverflow() {
+  const root = el.epubContent;
+  if (!root) return;
+  root.querySelectorAll("[style]").forEach((node) => {
+    const s = node.getAttribute("style") || "";
+    // Strip common width breakers from publisher CSS inline styles
+    let next = s
+      .replace(/max-width\s*:\s*[^;]+;?/gi, "")
+      .replace(/width\s*:\s*\d{3,}px;?/gi, "width:100%;")
+      .replace(/min-width\s*:\s*[^;]+;?/gi, "")
+      .replace(/white-space\s*:\s*nowrap;?/gi, "white-space:normal;");
+    if (next !== s) node.setAttribute("style", next);
+  });
+  root.querySelectorAll("img, svg, table, pre, video, iframe").forEach((node) => {
+    node.style.maxWidth = "100%";
+    if (node.tagName === "IMG" || node.tagName === "SVG") {
+      node.style.height = "auto";
+    }
+    if (node.tagName === "TABLE") {
+      node.style.width = "100%";
+    }
+    if (node.tagName === "PRE") {
+      node.style.whiteSpace = "pre-wrap";
+      node.style.overflowX = "hidden";
+    }
+  });
+}
+
 function wireEpubInteractions() {
+  clampEpubHorizontalOverflow();
   // Links
   el.epubContent.querySelectorAll("a[href]").forEach((a) => {
     a.addEventListener("click", onEpubLinkClick);

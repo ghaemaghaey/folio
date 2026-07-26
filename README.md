@@ -4,6 +4,22 @@
 
 Folio is a distraction-free app for reading PDFs and EPUBs — built because good reading software should feel like a book, not a browser tab full of toolbars.
 
+### Short description (for GitHub “About”)
+
+Copy this into the repository **About** description:
+
+```text
+Calm open-source desktop reader for Windows & Linux. PDF + EPUB, distraction-free UI, bookshelf with last-read position, sepia/dark themes, and Persian + English fonts.
+```
+
+**One-liner tagline:**
+
+```text
+A calm desktop reader for PDF and EPUB — less chrome, more book.
+```
+
+**Suggested topics:** `ebook-reader` · `pdf` · `epub` · `golang` · `wails` · `desktop-app` · `open-source` · `reading`
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go)](https://go.dev/)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey)](#install)
