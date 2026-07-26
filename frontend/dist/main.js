@@ -1151,7 +1151,7 @@ function clampEpubHorizontalOverflow() {
         word-break: break-word !important;
         word-wrap: break-word !important;
       }
-      .epub-content p, .epub-content div, .epub-content span, .epub-content a,
+      .epub-content p, .epub-content div, .epub-content span,
       .epub-content li, .epub-content td, .epub-content th, .epub-content h1,
       .epub-content h2, .epub-content h3, .epub-content h4, .epub-content h5,
       .epub-content h6, .epub-content label, .epub-content em, .epub-content strong {
@@ -1159,6 +1159,15 @@ function clampEpubHorizontalOverflow() {
         overflow-wrap: anywhere !important;
         word-break: break-word !important;
         max-width: 100% !important;
+      }
+      /* Long hyperlinks (e.g. full http://… URLs) — must use break-all */
+      .epub-content a, .epub-content a[href], .epub-content a * {
+        white-space: normal !important;
+        overflow-wrap: anywhere !important;
+        word-break: break-all !important;
+        word-wrap: break-word !important;
+        max-width: 100% !important;
+        display: inline !important;
       }
       .epub-content img, .epub-content svg, .epub-content video, .epub-content canvas,
       .epub-content iframe, .epub-content object, .epub-content embed {
@@ -1224,6 +1233,9 @@ function clampEpubHorizontalOverflow() {
     }
   });
 
+  // Long bare URLs / link text cannot use normal word boundaries — soft-break them
+  softBreakLongUrls(root);
+
   // Pin every shell node to the book column width (px), not just %
   const col = el.epubBook?.clientWidth || el.epubViewport?.clientWidth || 0;
   [el.epubViewport, el.epubBook, el.epubPages, el.epubContent].forEach((n) => {
@@ -1252,6 +1264,49 @@ function clampEpubHorizontalOverflow() {
   }
   if (el.epubBook) el.epubBook.scrollLeft = 0;
   if (el.epubViewport) el.epubViewport.scrollLeft = 0;
+}
+
+/**
+ * Insert zero-width break opportunities into long URLs / unbroken tokens
+ * so they wrap inside the reading column (e.g. realclearpolitics.com/video/...).
+ */
+function softBreakLongUrls(root) {
+  if (!root) return;
+  const ZWSP = "\u200B"; // zero-width space — invisible wrap point
+
+  const breakToken = (s) => {
+    // Prefer breaks after URL punctuation; also every ~18 chars as fallback
+    return s
+      .replace(/(https?:\/\/[^\s<>"']+)/gi, (url) =>
+        url
+          .replace(/([\/\?&=._\-+%#:~])/g, `$1${ZWSP}`)
+          .replace(/(.{18})/g, `$1${ZWSP}`)
+      )
+      .replace(/([^\s]{24})/g, `$1${ZWSP}`);
+  };
+
+  // Style every anchor for break-all
+  root.querySelectorAll("a").forEach((a) => {
+    a.style.wordBreak = "break-all";
+    a.style.overflowWrap = "anywhere";
+    a.style.whiteSpace = "normal";
+    a.style.maxWidth = "100%";
+    a.style.display = "inline";
+  });
+
+  // Walk text nodes (link labels + plain-text URLs in paragraphs)
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+  const texts = [];
+  while (walker.nextNode()) texts.push(walker.currentNode);
+
+  for (const tn of texts) {
+    const t = tn.nodeValue;
+    if (!t || t.length < 30) continue;
+    // Only touch nodes that look like they contain a URL or a very long token
+    if (!/https?:\/\/|[A-Za-z0-9_\-./%=]{40,}/.test(t)) continue;
+    const next = breakToken(t);
+    if (next !== t) tn.nodeValue = next;
+  }
 }
 
 function wireEpubInteractions() {

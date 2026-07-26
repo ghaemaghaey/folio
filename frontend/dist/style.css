@@ -944,10 +944,18 @@ img {
   margin: 1em auto;
 }
 
-.epub-content a {
+/* Long URLs must break mid-string (break-word alone will NOT wrap them) */
+.epub-content a,
+.epub-content a[href] {
   color: var(--accent);
-  overflow-wrap: anywhere;
-  word-break: break-word;
+  display: inline;
+  max-width: 100% !important;
+  overflow-wrap: anywhere !important;
+  word-break: break-all !important;
+  word-wrap: break-word !important;
+  white-space: normal !important;
+  /* Optional soft wrap for very long paths */
+  line-break: anywhere;
 }
 
 /* RTL-friendly when Persian fonts selected */
@@ -1257,7 +1265,6 @@ html[data-font="gandom"] .epub-content {
 .epub-content p,
 .epub-content div,
 .epub-content span,
-.epub-content a,
 .epub-content li,
 .epub-content h1,
 .epub-content h2,
@@ -1265,6 +1272,15 @@ html[data-font="gandom"] .epub-content {
 .epub-content h4 {
   overflow-wrap: anywhere !important;
   word-break: break-word !important;
+  white-space: normal !important;
+  max-width: 100% !important;
+}
+
+/* URLs / long tokens: break mid-character so the column never widens */
+.epub-content a,
+.epub-content a * {
+  word-break: break-all !important;
+  overflow-wrap: anywhere !important;
   white-space: normal !important;
   max-width: 100% !important;
 }
