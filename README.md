@@ -174,8 +174,8 @@ Pushing a version tag runs the **Release** workflow, which builds Windows and Li
 
 ```bash
 # After commits are on the default branch:
-git tag v0.6.3
-git push origin v0.6.3
+git tag v0.6.4
+git push origin v0.6.4
 ```
 
 Workflow: [`.github/workflows/release.yml`](.github/workflows/release.yml)
