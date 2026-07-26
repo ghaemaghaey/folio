@@ -36,6 +36,14 @@
             </div>
           </div>
           <div class="lib-actions">
+            <div class="lib-tabs" role="tablist" aria-label="Library sections">
+              <button type="button" class="lib-tab is-active" id="tab-shelf" role="tab" aria-selected="true">
+                Shelf
+              </button>
+              <button type="button" class="lib-tab" id="tab-catalog" role="tab" aria-selected="false">
+                Catalog
+              </button>
+            </div>
             <button type="button" class="btn btn--ghost" id="btn-theme-cycle" title="Theme">
               <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
                 <circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.75" />
@@ -52,7 +60,7 @@
           </div>
         </header>
 
-        <main class="lib-main">
+        <main class="lib-main" id="lib-main-shelf">
           <div id="shelf" class="shelf is-hidden" aria-label="Bookshelf"></div>
 
           <div class="welcome-card" id="welcome-card">
@@ -73,7 +81,80 @@
             <button type="button" class="btn btn--primary btn--lg" id="btn-open-file-hero">
               Choose a PDF or EPUB
             </button>
-            <p class="welcome-hint">Persian &amp; English fonts · page or scroll · zoom</p>
+            <p class="welcome-hint">Persian &amp; English fonts · page or scroll · zoom · Calibre catalog</p>
+          </div>
+        </main>
+
+        <!-- Calibre-Web OPDS catalog -->
+        <main class="lib-main catalog-main is-hidden" id="lib-main-catalog" aria-label="Remote catalog">
+          <div class="catalog-toolbar">
+            <div class="catalog-toolbar-text">
+              <h2 class="catalog-heading">Catalog</h2>
+              <p class="catalog-sub" id="catalog-sub">Newest books from your Calibre library</p>
+            </div>
+            <div class="catalog-toolbar-actions">
+              <button type="button" class="btn btn--ghost" id="btn-catalog-settings" title="OPDS server">
+                Settings
+              </button>
+              <button type="button" class="btn btn--primary" id="btn-catalog-refresh" title="Reload catalog">
+                Refresh
+              </button>
+            </div>
+          </div>
+
+          <div class="catalog-search-wrap">
+            <label class="catalog-search" for="catalog-search-input">
+              <svg class="icon catalog-search-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="1.75" />
+                <path d="M16 16l4 4" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" />
+              </svg>
+              <input
+                type="search"
+                id="catalog-search-input"
+                placeholder="Search title, author…"
+                autocomplete="off"
+                spellcheck="false"
+              />
+            </label>
+          </div>
+
+          <div class="catalog-settings is-hidden" id="catalog-settings" role="region" aria-label="Catalog settings">
+            <label class="catalog-field">
+              <span>Calibre-Web base URL</span>
+              <input type="url" id="opds-base-url" placeholder="https://calibre.ghaemghh.ir" value="https://calibre.ghaemghh.ir" autocomplete="off" spellcheck="false" />
+            </label>
+            <div class="catalog-field-row">
+              <label class="catalog-field">
+                <span>Username <em>(optional)</em></span>
+                <input type="text" id="opds-user" placeholder="Leave empty if open" autocomplete="username" />
+              </label>
+              <label class="catalog-field">
+                <span>Password <em>(optional)</em></span>
+                <input type="password" id="opds-pass" placeholder="Leave empty if open" autocomplete="current-password" />
+              </label>
+            </div>
+            <p class="catalog-hint" id="catalog-books-dir">
+              Default server is <code>https://calibre.ghaemghh.ir</code> (no login). Downloads save to the
+              <code>books/</code> folder next to Folio. Change the URL only if you use another instance.
+            </p>
+            <div class="catalog-settings-actions">
+              <button type="button" class="btn btn--primary" id="btn-opds-save">Save &amp; connect</button>
+            </div>
+          </div>
+
+          <div class="catalog-status" id="catalog-status" hidden></div>
+          <div id="catalog-grid" class="catalog-grid" aria-label="Remote books"></div>
+          <div class="catalog-sentinel" id="catalog-sentinel" hidden>
+            <div class="spinner" aria-hidden="true"></div>
+            <span>Loading more…</span>
+          </div>
+          <div class="catalog-empty is-hidden" id="catalog-empty">
+            <h3 class="welcome-title" style="font-size: var(--text-xl)">No books found</h3>
+            <p class="welcome-body">
+              Nothing matched your search, or the catalog could not be reached. Check Settings if the
+              server URL should be different from the default.
+            </p>
+            <button type="button" class="btn btn--primary" id="btn-catalog-setup">Open settings</button>
           </div>
         </main>
 

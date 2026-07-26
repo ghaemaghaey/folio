@@ -63,7 +63,21 @@ const state = {
   restoring: false,
   // Content-stable EPUB anchor (0–1 through full document height).
   epubScrollRatio: 0,
+  // Library sub-view: "shelf" | "catalog"
+  libTab: "shelf",
+  catalog: {
+    nextURL: "",
+    loading: false,
+    books: [], // OPDSBookDTO[]
+    downloading: new Map(), // id -> percent
+    query: "",
+    searchTimer: null,
+    searchSeq: 0, // ignore stale debounced responses
+  },
 };
+
+/** Built-in Calibre-Web (open OPDS, no auth). */
+const DEFAULT_OPDS_BASE = "https://calibre.ghaemghh.ir";
 
 function hasWails() {
   return typeof window.go !== "undefined" && window.go?.main?.App;
@@ -76,12 +90,31 @@ const $ = (s) => document.querySelector(s);
 const el = {
   library: $("#view-library"),
   reader: $("#view-reader"),
-  libMain: document.querySelector(".lib-main"),
+  libMain: $("#lib-main-shelf") || document.querySelector(".lib-main"),
+  libMainShelf: $("#lib-main-shelf"),
+  libMainCatalog: $("#lib-main-catalog"),
+  tabShelf: $("#tab-shelf"),
+  tabCatalog: $("#tab-catalog"),
   shelf: $("#shelf"),
   welcome: $("#welcome-card"),
   openFile: $("#btn-open-file"),
   openFileHero: $("#btn-open-file-hero"),
   themeCycle: $("#btn-theme-cycle"),
+  catalogGrid: $("#catalog-grid"),
+  catalogEmpty: $("#catalog-empty"),
+  catalogStatus: $("#catalog-status"),
+  catalogSub: $("#catalog-sub"),
+  catalogSettings: $("#catalog-settings"),
+  catalogSentinel: $("#catalog-sentinel"),
+  catalogBooksDir: $("#catalog-books-dir"),
+  catalogSearch: $("#catalog-search-input"),
+  opdsBaseURL: $("#opds-base-url"),
+  opdsUser: $("#opds-user"),
+  opdsPass: $("#opds-pass"),
+  btnCatalogSettings: $("#btn-catalog-settings"),
+  btnCatalogRefresh: $("#btn-catalog-refresh"),
+  btnCatalogSetup: $("#btn-catalog-setup"),
+  btnOpdsSave: $("#btn-opds-save"),
   readerTheme: $("#btn-reader-theme"),
   back: $("#btn-back"),
   prev: $("#btn-prev"),
@@ -514,7 +547,461 @@ function showLibrary() {
   el.fontPanel?.classList.add("is-hidden");
   el.tocPanel?.classList.add("is-hidden");
   el.guidePanel?.classList.add("is-hidden");
-  refreshShelf();
+  if (state.libTab === "catalog") {
+    switchLibTab("catalog", { skipLoad: false });
+  } else {
+    switchLibTab("shelf", { skipLoad: true });
+    refreshShelf();
+  }
+}
+
+// ─── Shelf / Catalog tabs ────────────────────────────────────
+
+function switchLibTab(tab, { skipLoad = false } = {}) {
+  state.libTab = tab === "catalog" ? "catalog" : "shelf";
+  const onShelf = state.libTab === "shelf";
+  el.tabShelf?.classList.toggle("is-active", onShelf);
+  el.tabCatalog?.classList.toggle("is-active", !onShelf);
+  el.tabShelf?.setAttribute("aria-selected", onShelf ? "true" : "false");
+  el.tabCatalog?.setAttribute("aria-selected", onShelf ? "false" : "true");
+  el.libMainShelf?.classList.toggle("is-hidden", !onShelf);
+  el.libMainCatalog?.classList.toggle("is-hidden", onShelf);
+  if (!onShelf && !skipLoad) {
+    loadCatalogInitial().catch((e) => console.error(e));
+  }
+  if (onShelf) refreshShelf();
+}
+
+function setCatalogStatus(msg, isError = false) {
+  if (!el.catalogStatus) return;
+  if (!msg) {
+    el.catalogStatus.hidden = true;
+    el.catalogStatus.textContent = "";
+    return;
+  }
+  el.catalogStatus.hidden = false;
+  el.catalogStatus.textContent = msg;
+  el.catalogStatus.classList.toggle("is-error", !!isError);
+}
+
+async function loadOPDSSettingsIntoForm() {
+  if (!hasWails() || typeof api().GetOPDSSettings !== "function") {
+    if (el.opdsBaseURL && !el.opdsBaseURL.value) {
+      el.opdsBaseURL.value = DEFAULT_OPDS_BASE;
+    }
+    return { baseURL: DEFAULT_OPDS_BASE };
+  }
+  try {
+    const s = await api().GetOPDSSettings();
+    const base = s.baseURL || s.BaseURL || DEFAULT_OPDS_BASE;
+    if (el.opdsBaseURL) el.opdsBaseURL.value = base || DEFAULT_OPDS_BASE;
+    if (el.opdsUser) el.opdsUser.value = s.username || s.Username || "";
+    if (el.opdsPass) el.opdsPass.value = s.password || s.Password || "";
+    const dir = s.booksDir || s.BooksDir || "";
+    if (el.catalogBooksDir && dir) {
+      el.catalogBooksDir.innerHTML =
+        `Default server is <code>${escapeHtml(DEFAULT_OPDS_BASE)}</code> (no login). ` +
+        `Downloads save to <code>${escapeHtml(dir)}</code>. ` +
+        `Change the URL only if you use another instance.`;
+    }
+    return s;
+  } catch (e) {
+    console.warn(e);
+    if (el.opdsBaseURL) el.opdsBaseURL.value = DEFAULT_OPDS_BASE;
+    return { baseURL: DEFAULT_OPDS_BASE };
+  }
+}
+
+async function saveOPDSSettings() {
+  if (!hasWails()) {
+    toast("Run Folio via Wails to use the catalog.", true);
+    return;
+  }
+  const base = (el.opdsBaseURL?.value || "").trim() || DEFAULT_OPDS_BASE;
+  const user = (el.opdsUser?.value || "").trim();
+  const pass = el.opdsPass?.value || "";
+  try {
+    await api().SaveOPDSSettings(base, user, pass);
+    el.catalogSettings?.classList.add("is-hidden");
+    toast("Catalog settings saved");
+    if (el.catalogSearch) el.catalogSearch.value = "";
+    state.catalog.query = "";
+    await loadCatalogInitial();
+  } catch (err) {
+    toast(String(err?.message || err), true);
+  }
+}
+
+/** Load newest-first listing (or re-run active search). */
+async function loadCatalogInitial() {
+  if (!hasWails() || typeof api().OPDSOpenLibrary !== "function") {
+    setCatalogStatus("Catalog requires a current Folio build.", true);
+    return;
+  }
+  await loadOPDSSettingsIntoForm();
+  const q = (state.catalog.query || "").trim();
+  if (q) {
+    await runCatalogSearch(q);
+    return;
+  }
+  el.catalogEmpty?.classList.add("is-hidden");
+  state.catalog.books = [];
+  state.catalog.nextURL = "";
+  el.catalogGrid && (el.catalogGrid.innerHTML = "");
+  setCatalogStatus("Loading newest books…");
+  state.catalog.loading = true;
+  const seq = ++state.catalog.searchSeq;
+  try {
+    const page = await api().OPDSOpenLibrary();
+    if (seq !== state.catalog.searchSeq) return;
+    appendCatalogPage(page);
+    setCatalogStatus("");
+    if (el.catalogSub) {
+      const n = state.catalog.books.filter((b) => !b.isNavigation).length;
+      el.catalogSub.textContent = page?.title
+        ? `${page.title} · newest first`
+        : `Newest first · ${n}+ books`;
+    }
+    if (!state.catalog.books.length) {
+      el.catalogEmpty?.classList.remove("is-hidden");
+    }
+  } catch (err) {
+    if (seq !== state.catalog.searchSeq) return;
+    console.error(err);
+    setCatalogStatus(String(err?.message || err || "Could not load catalog"), true);
+    el.catalogEmpty?.classList.remove("is-hidden");
+  } finally {
+    if (seq === state.catalog.searchSeq) {
+      state.catalog.loading = false;
+      updateCatalogSentinel();
+    }
+  }
+}
+
+async function runCatalogSearch(query) {
+  if (!hasWails()) return;
+  const q = (query || "").trim();
+  state.catalog.query = q;
+  if (!q) {
+    await loadCatalogInitial();
+    return;
+  }
+  if (typeof api().OPDSSearch !== "function") {
+    setCatalogStatus("Search requires a current Folio build.", true);
+    return;
+  }
+  el.catalogEmpty?.classList.add("is-hidden");
+  state.catalog.books = [];
+  state.catalog.nextURL = "";
+  el.catalogGrid && (el.catalogGrid.innerHTML = "");
+  setCatalogStatus(`Searching for “${q}”…`);
+  state.catalog.loading = true;
+  const seq = ++state.catalog.searchSeq;
+  try {
+    const page = await api().OPDSSearch(q);
+    if (seq !== state.catalog.searchSeq) return;
+    appendCatalogPage(page);
+    setCatalogStatus("");
+    if (el.catalogSub) {
+      el.catalogSub.textContent = `Search: “${q}”`;
+    }
+    if (!state.catalog.books.length) {
+      el.catalogEmpty?.classList.remove("is-hidden");
+      setCatalogStatus(`No results for “${q}”`);
+    }
+  } catch (err) {
+    if (seq !== state.catalog.searchSeq) return;
+    console.error(err);
+    setCatalogStatus(String(err?.message || err || "Search failed"), true);
+    el.catalogEmpty?.classList.remove("is-hidden");
+  } finally {
+    if (seq === state.catalog.searchSeq) {
+      state.catalog.loading = false;
+      updateCatalogSentinel();
+    }
+  }
+}
+
+/** Debounce search: request after user stops typing (~400ms). */
+function onCatalogSearchInput() {
+  const q = el.catalogSearch?.value || "";
+  if (state.catalog.searchTimer) clearTimeout(state.catalog.searchTimer);
+  state.catalog.searchTimer = setTimeout(() => {
+    state.catalog.searchTimer = null;
+    const next = (el.catalogSearch?.value || "").trim();
+    // Empty field → back to newest listing
+    if (!next) {
+      state.catalog.query = "";
+      loadCatalogInitial();
+      return;
+    }
+    runCatalogSearch(next);
+  }, 400);
+}
+
+async function loadCatalogMore() {
+  if (state.catalog.loading || !state.catalog.nextURL) return;
+  if (!hasWails()) return;
+  state.catalog.loading = true;
+  updateCatalogSentinel();
+  try {
+    const page = await api().OPDSFetchPage(state.catalog.nextURL);
+    appendCatalogPage(page);
+  } catch (err) {
+    toast(String(err?.message || err), true);
+  } finally {
+    state.catalog.loading = false;
+    updateCatalogSentinel();
+  }
+}
+
+function appendCatalogPage(page) {
+  if (!page) return;
+  state.catalog.nextURL = page.nextURL || page.NextURL || "";
+  const books = page.books || page.Books || [];
+  for (const raw of books) {
+    const b = normalizeOPDSBook(raw);
+    // Skip pure nav nodes in the grid (we open the flat book list)
+    if (b.isNavigation && !(b.acquisitions && b.acquisitions.length)) continue;
+    state.catalog.books.push(b);
+    el.catalogGrid?.appendChild(renderCatalogCard(b));
+  }
+  if (state.catalog.books.length) {
+    el.catalogEmpty?.classList.add("is-hidden");
+  }
+}
+
+function normalizeOPDSBook(raw) {
+  return {
+    id: raw.id || raw.ID || "",
+    title: raw.title || raw.Title || "Untitled",
+    authors: raw.authors || raw.Authors || [],
+    summary: raw.summary || raw.Summary || "",
+    coverURL: raw.coverURL || raw.CoverURL || "",
+    acquisitions: raw.acquisitions || raw.Acquisitions || [],
+    state: raw.state || raw.State || "not_downloaded",
+    progress: raw.progress ?? raw.Progress ?? 0,
+    progressLabel: raw.progressLabel || raw.ProgressLabel || "",
+    localBookId: raw.localBookId || raw.LocalBookID || "",
+    localPath: raw.localPath || raw.LocalPath || "",
+    isNavigation: !!(raw.isNavigation ?? raw.IsNavigation),
+    navURL: raw.navURL || raw.NavURL || "",
+  };
+}
+
+function catalogStateLabel(b) {
+  const dl = state.catalog.downloading.get(b.id);
+  if (dl != null) {
+    return dl >= 100 ? "Finishing…" : `${Math.round(dl)}%`;
+  }
+  switch (b.state) {
+    case "read":
+      return "Read";
+    case "in_progress":
+      return b.progressLabel || `${Math.round((b.progress || 0) * 100)}%`;
+    case "downloaded":
+      return "Downloaded";
+    default:
+      return "Not downloaded";
+  }
+}
+
+function renderCatalogCard(b) {
+  const card = document.createElement("article");
+  card.className = "catalog-card";
+  card.dataset.id = b.id;
+
+  const cover = document.createElement("div");
+  cover.className = "catalog-cover";
+  if (b.coverURL) {
+    const img = document.createElement("img");
+    img.alt = "";
+    img.loading = "lazy";
+    img.src = b.coverURL;
+    img.onerror = () => {
+      img.remove();
+      const fb = document.createElement("div");
+      fb.className = "catalog-cover-fallback";
+      fb.textContent = (b.title || "?").slice(0, 40);
+      cover.appendChild(fb);
+    };
+    cover.appendChild(img);
+  } else {
+    const fb = document.createElement("div");
+    fb.className = "catalog-cover-fallback";
+    fb.textContent = (b.title || "?").slice(0, 40);
+    cover.appendChild(fb);
+  }
+
+  const badge = document.createElement("span");
+  badge.className = "catalog-badge";
+  const label = catalogStateLabel(b);
+  badge.textContent = label;
+  if (state.catalog.downloading.has(b.id)) badge.classList.add("is-downloading");
+  else if (b.state === "read") badge.classList.add("is-read");
+  else if (b.state === "in_progress") badge.classList.add("is-progress");
+  cover.appendChild(badge);
+
+  const title = document.createElement("h3");
+  title.className = "catalog-title";
+  title.textContent = b.title;
+
+  const author = document.createElement("p");
+  author.className = "catalog-author";
+  author.textContent = (b.authors || []).join(", ") || "Unknown author";
+
+  const actions = document.createElement("div");
+  actions.className = "catalog-card-actions";
+  const btn = document.createElement("button");
+  btn.type = "button";
+  const owned =
+    b.state === "downloaded" ||
+    b.state === "in_progress" ||
+    b.state === "read" ||
+    !!b.localBookId;
+  if (state.catalog.downloading.has(b.id)) {
+    btn.className = "btn btn--ghost";
+    btn.disabled = true;
+    btn.textContent = "Downloading…";
+  } else if (owned) {
+    btn.className = "btn btn--primary";
+    btn.textContent = "Open";
+    btn.addEventListener("click", () => openCatalogBook(b));
+  } else {
+    btn.className = "btn btn--primary";
+    btn.textContent = "Download";
+    btn.addEventListener("click", () => downloadCatalogBook(b, btn));
+  }
+  actions.appendChild(btn);
+
+  const bar = document.createElement("div");
+  bar.className = "catalog-progress-bar";
+  bar.hidden = !state.catalog.downloading.has(b.id);
+  const fill = document.createElement("span");
+  fill.style.width = `${state.catalog.downloading.get(b.id) || 0}%`;
+  bar.appendChild(fill);
+
+  card.append(cover, title, author, actions, bar);
+  return card;
+}
+
+function refreshCatalogCard(id) {
+  const b = state.catalog.books.find((x) => x.id === id);
+  if (!b || !el.catalogGrid) return;
+  const safe = String(id).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const old = el.catalogGrid.querySelector(`.catalog-card[data-id="${safe}"]`);
+  const next = renderCatalogCard(b);
+  if (old) old.replaceWith(next);
+}
+
+async function openCatalogBook(b) {
+  if (b.localBookId) {
+    await openBookId(b.localBookId);
+    return;
+  }
+  // Path-only ownership (not yet on shelf with id)
+  if (b.localPath && hasWails() && typeof api().OpenPath === "function") {
+    try {
+      toast("Opening…", false, 0);
+      const doc = await api().OpenPath(b.localPath);
+      if (doc) await enterDocument(doc);
+      hideToast();
+    } catch (err) {
+      toast(String(err?.message || err), true);
+    }
+  }
+}
+
+async function downloadCatalogBook(b, btnEl) {
+  if (!hasWails() || typeof api().OPDSDownload !== "function") {
+    toast("Download is not available in this build.", true);
+    return;
+  }
+  const acq = (b.acquisitions || [])[0];
+  // Prefer epub then pdf
+  let pick = acq;
+  for (const a of b.acquisitions || []) {
+    const f = (a.format || a.Format || "").toLowerCase();
+    const t = (a.type || a.Type || "").toLowerCase();
+    if (f === "epub" || t.includes("epub")) {
+      pick = a;
+      break;
+    }
+    if (f === "pdf" || t.includes("pdf")) pick = a;
+  }
+  if (!pick) {
+    toast("No downloadable format for this book.", true);
+    return;
+  }
+  const href = pick.href || pick.Href;
+  const mime = pick.type || pick.Type || "";
+  state.catalog.downloading.set(b.id, 0);
+  refreshCatalogCard(b.id);
+  if (btnEl) {
+    btnEl.disabled = true;
+    btnEl.textContent = "Downloading…";
+  }
+  try {
+    const result = await api().OPDSDownload(b.id, b.title, href, mime);
+    const updated = normalizeOPDSBook(result?.book || result?.Book || {});
+    const idx = state.catalog.books.findIndex((x) => x.id === b.id);
+    if (idx >= 0) {
+      state.catalog.books[idx] = {
+        ...b,
+        ...updated,
+        id: b.id,
+        title: b.title || updated.title,
+        authors: b.authors,
+        coverURL: b.coverURL,
+        acquisitions: b.acquisitions,
+      };
+    }
+    state.catalog.downloading.delete(b.id);
+    refreshCatalogCard(b.id);
+    toast(result?.skipped ? "Already on your shelf" : "Downloaded to books/");
+    refreshShelf();
+  } catch (err) {
+    state.catalog.downloading.delete(b.id);
+    refreshCatalogCard(b.id);
+    toast(String(err?.message || err), true);
+  }
+}
+
+function updateCatalogSentinel() {
+  if (!el.catalogSentinel) return;
+  const show = !!state.catalog.nextURL || state.catalog.loading;
+  el.catalogSentinel.hidden = !show;
+  if (!state.catalog.nextURL && !state.catalog.loading) {
+    el.catalogSentinel.hidden = true;
+  }
+}
+
+function onCatalogScroll() {
+  const main = el.libMainCatalog;
+  if (!main || state.libTab !== "catalog") return;
+  if (state.catalog.loading || !state.catalog.nextURL) return;
+  const nearBottom =
+    main.scrollTop + main.clientHeight >= main.scrollHeight - 280;
+  if (nearBottom) loadCatalogMore();
+}
+
+function wireOPDSProgressEvents() {
+  try {
+    const rt = window.runtime;
+    if (!rt || typeof rt.EventsOn !== "function") return;
+    rt.EventsOn("opds:download-progress", (payload) => {
+      const id = payload?.id;
+      if (!id) return;
+      const done = !!payload.done;
+      const pct = Number(payload.percent) || 0;
+      if (done) {
+        state.catalog.downloading.delete(id);
+      } else {
+        state.catalog.downloading.set(id, pct);
+      }
+      refreshCatalogCard(id);
+    });
+  } catch (_) {}
 }
 
 function showReader() {
@@ -541,10 +1028,12 @@ async function refreshShelf() {
     el.shelf.classList.add("is-hidden");
     el.shelf.innerHTML = "";
     el.welcome?.classList.remove("is-hidden");
+    el.libMainShelf?.classList.remove("has-shelf");
     el.libMain?.classList.remove("has-shelf");
     return;
   }
   el.welcome?.classList.add("is-hidden");
+  el.libMainShelf?.classList.add("has-shelf");
   el.libMain?.classList.add("has-shelf");
   el.shelf.classList.remove("is-hidden");
   el.shelf.innerHTML = "";
@@ -1828,6 +2317,43 @@ function buildFontChips() {
 // ─── Events ──────────────────────────────────────────────────
 
 function bindEvents() {
+  el.tabShelf?.addEventListener("click", () => switchLibTab("shelf"));
+  el.tabCatalog?.addEventListener("click", () => switchLibTab("catalog"));
+  el.btnCatalogSettings?.addEventListener("click", () => {
+    el.catalogSettings?.classList.toggle("is-hidden");
+    loadOPDSSettingsIntoForm();
+  });
+  el.btnCatalogSetup?.addEventListener("click", () => {
+    el.catalogSettings?.classList.remove("is-hidden");
+    el.opdsBaseURL?.focus();
+  });
+  el.btnCatalogRefresh?.addEventListener("click", () => {
+    if (el.catalogSearch) el.catalogSearch.value = state.catalog.query || "";
+    loadCatalogInitial();
+  });
+  el.btnOpdsSave?.addEventListener("click", () => saveOPDSSettings());
+  el.catalogSearch?.addEventListener("input", onCatalogSearchInput);
+  el.catalogSearch?.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      el.catalogSearch.value = "";
+      state.catalog.query = "";
+      if (state.catalog.searchTimer) clearTimeout(state.catalog.searchTimer);
+      loadCatalogInitial();
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (state.catalog.searchTimer) clearTimeout(state.catalog.searchTimer);
+      const q = (el.catalogSearch.value || "").trim();
+      if (!q) {
+        state.catalog.query = "";
+        loadCatalogInitial();
+      } else runCatalogSearch(q);
+    }
+  });
+  el.libMainCatalog?.addEventListener("scroll", onCatalogScroll, {
+    passive: true,
+  });
+  wireOPDSProgressEvents();
+
   el.openFile?.addEventListener("click", openFile);
   el.openFileHero?.addEventListener("click", openFile);
   el.themeCycle?.addEventListener("click", cycleTheme);

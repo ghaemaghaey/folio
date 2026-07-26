@@ -331,6 +331,91 @@ func fingerprintFile(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// FingerprintFile is the exported 64KiB SHA-256 used for shelf identity.
+func FingerprintFile(path string) (string, error) {
+	return fingerprintFile(path)
+}
+
+// ContentHash returns full-file SHA-256 (ownership / cross-path matching).
+func ContentHash(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// FindByFingerprint returns the first shelf book with the given fingerprint.
+func (s *Store) FindByFingerprint(fp string) (Book, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if fp == "" {
+		return Book{}, false
+	}
+	for _, b := range s.data.Books {
+		if b.Fingerprint == fp {
+			return b, true
+		}
+	}
+	return Book{}, false
+}
+
+// FindByPath returns a book whose path matches (case-insensitive on Windows).
+func (s *Store) FindByPath(path string) (Book, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, b := range s.data.Books {
+		if equalPath(b.Path, path) {
+			return b, true
+		}
+	}
+	return Book{}, false
+}
+
+// ReadingProgress returns 0–1 estimated progress for a book.
+// Prefers scroll ratio; otherwise last page / page count.
+func ReadingProgress(b Book) float64 {
+	if b.LastScroll > 0.001 {
+		if b.LastScroll > 1 {
+			return 1
+		}
+		return b.LastScroll
+	}
+	if b.PageCount > 1 && b.LastPage > 0 {
+		p := float64(b.LastPage) / float64(b.PageCount-1)
+		if p < 0 {
+			return 0
+		}
+		if p > 1 {
+			return 1
+		}
+		return p
+	}
+	if b.PageCount == 1 && b.LastPage > 0 {
+		return 1
+	}
+	return 0
+}
+
+// ReadingState classifies local progress for UI badges.
+// not_started | in_progress | read
+func ReadingState(b Book) string {
+	p := ReadingProgress(b)
+	switch {
+	case p >= 0.95:
+		return "read"
+	case p >= 0.02:
+		return "in_progress"
+	default:
+		return "not_started"
+	}
+}
+
 func equalPath(a, b string) bool {
 	a = filepath.Clean(a)
 	b = filepath.Clean(b)
