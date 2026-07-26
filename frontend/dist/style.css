@@ -946,7 +946,7 @@ html[data-font="gandom"] .epub-content {
   left: 0;
   bottom: 0;
   width: min(20rem, 88vw);
-  z-index: 35;
+  z-index: 40;
   background: var(--surface-chrome);
   backdrop-filter: blur(16px);
   border-right: 1px solid var(--border);
@@ -954,9 +954,15 @@ html[data-font="gandom"] .epub-content {
   display: flex;
   flex-direction: column;
   animation: fade-rise var(--dur-med) var(--ease-out) both;
+  pointer-events: auto;
 }
 
 .toc-panel.is-hidden { display: none; }
+
+/* Keep TOC interactive even when chrome is hidden */
+.view--reader[data-chrome="hidden"] .toc-panel:not(.is-hidden) {
+  pointer-events: auto;
+}
 
 .toc-header {
   display: flex;
@@ -975,8 +981,11 @@ html[data-font="gandom"] .epub-content {
 .toc-list {
   list-style: none;
   overflow: auto;
+  overscroll-behavior: contain;
   padding: var(--space-2);
   flex: 1;
+  min-height: 0;
+  -webkit-overflow-scrolling: touch;
 }
 
 .toc-list li button {
@@ -1032,28 +1041,35 @@ html[data-font="gandom"] .epub-content {
   position: relative;
 }
 
-/* Page mode: CSS multi-column pagination */
-.epub-viewport[data-mode="page"] .epub-pages {
+/* Page mode: vertical book pages (clip + translateY) */
+.epub-viewport[data-mode="page"] .epub-book {
   overflow: hidden;
 }
 
-.epub-viewport[data-mode="page"] .epub-content {
+.epub-viewport[data-mode="page"] .epub-pages {
+  overflow: hidden;
   height: 100%;
   width: 100%;
+}
+
+.epub-viewport[data-mode="page"] .epub-content {
+  width: 100%;
+  height: auto;
   padding: var(--space-5);
   box-sizing: border-box;
-  column-gap: 0;
-  column-fill: auto;
-  overflow: visible;
   margin: 0;
   max-width: none;
+  columns: auto;
+  column-width: auto;
   will-change: transform;
 }
 
-/* Scroll mode: continuous vertical reading */
+/* Scroll mode: continuous vertical reading of the chapter */
 .epub-viewport[data-mode="scroll"] .epub-book {
   overflow: auto;
+  overflow-x: hidden;
   box-shadow: var(--page-shadow);
+  height: 100%;
 }
 
 .epub-viewport[data-mode="scroll"] .epub-pages {
@@ -1066,8 +1082,29 @@ html[data-font="gandom"] .epub-content {
   height: auto;
   max-width: none;
   padding: var(--space-6) var(--space-5);
-  column-width: auto;
   columns: auto;
+  column-width: auto;
+  transform: none !important;
+}
+
+/* Grab-to-pan surfaces */
+.is-pannable {
+  cursor: grab;
+  touch-action: none;
+}
+
+.is-pannable.is-panning {
+  cursor: grabbing;
+  user-select: none;
+}
+
+.scroll-viewport {
+  scroll-behavior: auto;
+  touch-action: none;
+}
+
+.page-viewport {
+  touch-action: none;
 }
 
 .epub-content img {
@@ -1086,6 +1123,7 @@ html[data-font="gandom"] .epub-content {
 
 .reading-guide {
   position: fixed;
+  /* left/width set in JS to match book edges exactly */
   left: 50%;
   transform: translateX(-50%);
   width: min(920px, calc(100vw - 2rem));
@@ -1093,10 +1131,11 @@ html[data-font="gandom"] .epub-content {
   top: var(--guide-top, 40%);
   z-index: 22;
   pointer-events: none;
-  border-radius: 4px;
+  border-radius: 0;
   background: hsl(var(--guide-hue, 48) 70% 55% / var(--guide-opacity, 0.28));
   box-shadow: inset 0 0 0 1px hsl(var(--guide-hue, 48) 60% 40% / 0.35);
-  transition: background 80ms linear, height 80ms linear;
+  transition: background 80ms linear, height 80ms linear, left 40ms linear, width 40ms linear;
+  box-sizing: border-box;
 }
 
 .reading-guide.is-hidden { display: none; }

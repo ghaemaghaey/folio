@@ -108,13 +108,39 @@ func Open(filePath string) (*Book, error) {
 			ID:        id,
 			Href:      href,
 			MediaType: item.MediaType,
-			Label:     item.Href,
+			Label:     "",
 		})
 	}
 
 	if book.Title == "" {
 		book.Title = "Untitled"
 	}
+
+	// Prefer real TOC labels from nav.xhtml / toc.ncx over bare filenames
+	labels := collectTOCLabels(files, opfDir, manifest)
+	for i := range book.Spine {
+		s := &book.Spine[i]
+		if lab := lookupLabel(labels, s.Href); lab != "" && !sameTitle(lab, book.Title) {
+			s.Label = lab
+			continue
+		}
+		// Heading inside chapter (skip if it is just the book title)
+		if raw, ok := readFile(files, s.Href); ok {
+			if h := firstHeading(string(raw)); h != "" && !sameTitle(h, book.Title) {
+				s.Label = h
+				continue
+			}
+		}
+		base := strings.TrimSuffix(path.Base(s.Href), path.Ext(s.Href))
+		base = strings.ReplaceAll(base, "_", " ")
+		base = strings.ReplaceAll(base, "-", " ")
+		if base != "" && !sameTitle(base, book.Title) {
+			s.Label = strings.TrimSpace(base)
+		} else {
+			s.Label = fmt.Sprintf("Chapter %d", i+1)
+		}
+	}
+
 	return book, nil
 }
 
@@ -134,23 +160,255 @@ type TOCItem struct {
 func (b *Book) TOC() []TOCItem {
 	out := make([]TOCItem, 0, len(b.Spine))
 	for i, s := range b.Spine {
-		label := s.Label
-		base := path.Base(s.Href)
-		if label == "" || label == s.Href {
-			label = strings.TrimSuffix(base, path.Ext(base))
-			if label == "" {
-				label = fmt.Sprintf("Chapter %d", i+1)
-			}
-		}
-		// Prefer first heading text when we can cheaply peek
-		if raw, ok := readFile(b.files, s.Href); ok {
-			if h := firstHeading(string(raw)); h != "" {
-				label = h
-			}
+		label := strings.TrimSpace(s.Label)
+		if label == "" || sameTitle(label, b.Title) {
+			label = fmt.Sprintf("Chapter %d", i+1)
 		}
 		out = append(out, TOCItem{Index: i, Label: label, Href: s.Href})
 	}
 	return out
+}
+
+func sameTitle(a, b string) bool {
+	na := strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(a))), " ")
+	nb := strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(b))), " ")
+	return na != "" && na == nb
+}
+
+// collectTOCLabels maps cleaned chapter href → label from NCX / nav doc.
+func collectTOCLabels(files map[string][]byte, opfDir string, manifest map[string]manifestItem) map[string]string {
+	out := make(map[string]string)
+
+	// EPUB3 nav document
+	for _, it := range manifest {
+		mt := strings.ToLower(it.MediaType)
+		props := strings.ToLower(it.Properties)
+		if strings.Contains(props, "nav") || mt == "application/xhtml+xml" && strings.Contains(strings.ToLower(it.Href), "nav") {
+			href := resolveOPFHref(opfDir, it.Href)
+			if data, ok := readFile(files, href); ok {
+				mergeLabels(out, parseNavHTML(string(data), path.Dir(href)))
+			}
+		}
+		if mt == "application/x-dtbncx+xml" || strings.HasSuffix(strings.ToLower(it.Href), ".ncx") {
+			href := resolveOPFHref(opfDir, it.Href)
+			if data, ok := readFile(files, href); ok {
+				mergeLabels(out, parseNCX(data, path.Dir(href)))
+			}
+		}
+	}
+
+	// Fallback common paths
+	for _, cand := range []string{
+		path.Join(opfDir, "toc.ncx"),
+		path.Join(opfDir, "nav.xhtml"),
+		path.Join(opfDir, "nav.html"),
+		"toc.ncx",
+		"OEBPS/toc.ncx",
+		"OEBPS/nav.xhtml",
+	} {
+		if data, ok := readFile(files, path.Clean(cand)); ok {
+			if strings.HasSuffix(strings.ToLower(cand), ".ncx") {
+				mergeLabels(out, parseNCX(data, path.Dir(path.Clean(cand))))
+			} else {
+				mergeLabels(out, parseNavHTML(string(data), path.Dir(path.Clean(cand))))
+			}
+		}
+	}
+	return out
+}
+
+func resolveOPFHref(opfDir, href string) string {
+	href = path.Clean(strings.ReplaceAll(href, "\\", "/"))
+	if opfDir != "" && !strings.HasPrefix(href, "/") {
+		return path.Clean(path.Join(opfDir, href))
+	}
+	return href
+}
+
+func mergeLabels(dst, src map[string]string) {
+	for k, v := range src {
+		if v == "" {
+			continue
+		}
+		if _, exists := dst[k]; !exists {
+			dst[k] = v
+		}
+		// also basename key
+		dst[path.Base(k)] = v
+	}
+}
+
+func lookupLabel(labels map[string]string, href string) string {
+	if labels == nil {
+		return ""
+	}
+	href = path.Clean(href)
+	if lab, ok := labels[href]; ok {
+		return lab
+	}
+	// strip fragment keys already cleaned
+	if lab, ok := labels[path.Base(href)]; ok {
+		return lab
+	}
+	// try without directory mismatch
+	for k, v := range labels {
+		if path.Base(k) == path.Base(href) {
+			return v
+		}
+	}
+	return ""
+}
+
+func parseNCX(data []byte, baseDir string) map[string]string {
+	out := make(map[string]string)
+	// Token walk — NCX namespaces vary
+	dec := xml.NewDecoder(bytes.NewReader(data))
+	dec.Strict = false
+	var (
+		inLabel bool
+		inText  bool
+		label   string
+	)
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			break
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			local := strings.ToLower(t.Name.Local)
+			switch local {
+			case "navlabel":
+				inLabel = true
+				label = ""
+			case "text":
+				if inLabel {
+					inText = true
+				}
+			case "content":
+				src := ""
+				for _, a := range t.Attr {
+					if strings.EqualFold(a.Name.Local, "src") {
+						src = a.Value
+						break
+					}
+				}
+				if src != "" && label != "" {
+					src = strings.Split(src, "#")[0]
+					full := path.Clean(path.Join(baseDir, src))
+					out[full] = strings.TrimSpace(label)
+					out[path.Base(full)] = strings.TrimSpace(label)
+				}
+			}
+		case xml.EndElement:
+			local := strings.ToLower(t.Name.Local)
+			if local == "text" {
+				inText = false
+			}
+			if local == "navlabel" {
+				inLabel = false
+			}
+		case xml.CharData:
+			if inText {
+				label += string(t)
+			}
+		}
+	}
+	return out
+}
+
+func parseNavHTML(html, baseDir string) map[string]string {
+	out := make(map[string]string)
+	// Find toc nav block if present
+	lower := strings.ToLower(html)
+	segment := html
+	if i := strings.Index(lower, `epub:type="toc"`); i >= 0 {
+		// from this nav tag
+		start := strings.LastIndex(lower[:i], "<nav")
+		if start >= 0 {
+			end := strings.Index(lower[i:], "</nav>")
+			if end >= 0 {
+				segment = html[start : i+end+6]
+			}
+		}
+	} else if i := strings.Index(lower, `epub:type='toc'`); i >= 0 {
+		start := strings.LastIndex(lower[:i], "<nav")
+		if start >= 0 {
+			end := strings.Index(lower[i:], "</nav>")
+			if end >= 0 {
+				segment = html[start : i+end+6]
+			}
+		}
+	}
+
+	// Extract <a href="...">label</a>
+	rest := segment
+	for {
+		low := strings.ToLower(rest)
+		a := strings.Index(low, "<a ")
+		if a < 0 {
+			a = strings.Index(low, "<a>")
+		}
+		if a < 0 {
+			break
+		}
+		rest = rest[a:]
+		gt := strings.Index(rest, ">")
+		if gt < 0 {
+			break
+		}
+		openTag := rest[:gt+1]
+		rest = rest[gt+1:]
+		end := strings.Index(strings.ToLower(rest), "</a>")
+		if end < 0 {
+			break
+		}
+		label := strings.TrimSpace(stripTags(rest[:end]))
+		rest = rest[end+4:]
+		href := attrValue(openTag, "href")
+		if href == "" || label == "" {
+			continue
+		}
+		if strings.HasPrefix(strings.ToLower(href), "http") {
+			continue
+		}
+		href = strings.Split(href, "#")[0]
+		if href == "" {
+			continue
+		}
+		full := path.Clean(path.Join(baseDir, href))
+		out[full] = label
+		out[path.Base(full)] = label
+	}
+	return out
+}
+
+func attrValue(tag, name string) string {
+	low := strings.ToLower(tag)
+	key := strings.ToLower(name) + "="
+	i := strings.Index(low, key)
+	if i < 0 {
+		return ""
+	}
+	rest := tag[i+len(key):]
+	if rest == "" {
+		return ""
+	}
+	q := rest[0]
+	if q == '"' || q == '\'' {
+		rest = rest[1:]
+		j := strings.IndexByte(rest, q)
+		if j < 0 {
+			return ""
+		}
+		return rest[:j]
+	}
+	// unquoted
+	j := strings.IndexAny(rest, " \t>")
+	if j < 0 {
+		return rest
+	}
+	return rest[:j]
 }
 
 // ResolveHref maps an internal relative href to a spine index and optional fragment.
@@ -188,7 +446,8 @@ func (b *Book) ResolveHref(fromChapter int, href string) (spineIndex int, fragme
 
 func firstHeading(xhtml string) string {
 	lower := strings.ToLower(xhtml)
-	for _, tag := range []string{"h1", "h2", "h3", "title"} {
+	// Prefer body headings; <title> is often the book name on every file
+	for _, tag := range []string{"h1", "h2", "h3"} {
 		open := "<" + tag
 		i := strings.Index(lower, open)
 		if i < 0 {
@@ -244,10 +503,13 @@ func (b *Book) GetChapter(index int) (*Chapter, error) {
 
 	html := extractBody(string(raw))
 	html = rewriteImageSources(html, path.Dir(item.Href), b.files)
-	// Improve label from heading
 	label := item.Label
-	if h := firstHeading(string(raw)); h != "" {
-		label = h
+	if label == "" || sameTitle(label, b.Title) {
+		if h := firstHeading(string(raw)); h != "" && !sameTitle(h, b.Title) {
+			label = h
+		} else {
+			label = fmt.Sprintf("Chapter %d", index+1)
+		}
 	}
 
 	return &Chapter{
@@ -276,9 +538,10 @@ type metaInfo struct {
 }
 
 type manifestItem struct {
-	ID        string
-	Href      string
-	MediaType string
+	ID         string
+	Href       string
+	MediaType  string
+	Properties string
 }
 
 func parseRootfile(containerXML []byte) (string, error) {
@@ -301,9 +564,10 @@ func parseRootfile(containerXML []byte) (string, error) {
 func parseOPF(data []byte) (metaInfo, map[string]manifestItem, []string, error) {
 	// Loose struct covering EPUB2/3 package
 	type item struct {
-		ID        string `xml:"id,attr"`
-		Href      string `xml:"href,attr"`
-		MediaType string `xml:"media-type,attr"`
+		ID         string `xml:"id,attr"`
+		Href       string `xml:"href,attr"`
+		MediaType  string `xml:"media-type,attr"`
+		Properties string `xml:"properties,attr"`
 	}
 	type itemref struct {
 		IDRef string `xml:"idref,attr"`
@@ -367,7 +631,9 @@ func parseOPF(data []byte) (metaInfo, map[string]manifestItem, []string, error) 
 
 	manifest := make(map[string]manifestItem)
 	for _, it := range pkg.Manifest.Items {
-		manifest[it.ID] = manifestItem{ID: it.ID, Href: it.Href, MediaType: it.MediaType}
+		manifest[it.ID] = manifestItem{
+			ID: it.ID, Href: it.Href, MediaType: it.MediaType, Properties: it.Properties,
+		}
 	}
 	var spine []string
 	for _, ir := range pkg.Spine.Itemrefs {

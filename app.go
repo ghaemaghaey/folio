@@ -69,6 +69,8 @@ func NewApp() *App {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 
+	// Library JSON is cheap — load now so the shelf is ready.
+	// PDFium WASM is heavy: lazy-init on first PDF open so the window appears fast.
 	path, err := library.DefaultPath()
 	if err != nil {
 		runtime.LogErrorf(ctx, "library path: %v", err)
@@ -80,13 +82,21 @@ func (a *App) startup(ctx context.Context) {
 			a.lib = store
 		}
 	}
+}
 
+// ensureRenderer lazily starts go-pdfium (WASM). Safe to call often.
+func (a *App) ensureRenderer() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.renderer != nil {
+		return nil
+	}
 	r, err := pdf.NewRenderer()
 	if err != nil {
-		runtime.LogErrorf(ctx, "pdfium init failed: %v", err)
-		return
+		return fmt.Errorf("pdfium init: %w", err)
 	}
 	a.renderer = r
+	return nil
 }
 
 func (a *App) shutdown(ctx context.Context) {
@@ -100,7 +110,7 @@ func (a *App) shutdown(ctx context.Context) {
 
 // AppVersion returns the app version string.
 func (a *App) AppVersion() string {
-	return "0.3.0"
+	return "0.4.0"
 }
 
 // OpenExternalURL opens http(s)/mailto links in the OS default browser.
@@ -149,6 +159,9 @@ func (a *App) ResolveEPUBLink(href string) (map[string]interface{}, error) {
 
 // PrefetchPDFPages warms the page cache (non-blocking from UI perspective when awaited in parallel).
 func (a *App) PrefetchPDFPages(pages []int, dpi int) {
+	if err := a.ensureRenderer(); err != nil {
+		return
+	}
 	a.mu.Lock()
 	path := ""
 	if a.openDoc != nil && a.openDoc.Format == library.FormatPDF {
@@ -295,6 +308,10 @@ func (a *App) SaveProgress(pageIndex int, scroll float64) error {
 }
 
 func (a *App) openPDF(path string, existingID string) (*DocumentInfo, error) {
+	if err := a.ensureRenderer(); err != nil {
+		return nil, err
+	}
+
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -485,6 +502,9 @@ func (a *App) openEPUB(path string, existingID string) (*DocumentInfo, error) {
 
 // RenderCurrentPage renders the active PDF page at dpi (zoom applied by caller via dpi).
 func (a *App) RenderCurrentPage(dpi int) (*PageImage, error) {
+	if err := a.ensureRenderer(); err != nil {
+		return nil, err
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -518,6 +538,9 @@ func (a *App) RenderPDFPage(pageIndex int, dpi int) (*PageImage, error) {
 }
 
 func (a *App) renderPDFPage(pageIndex int, dpi int, setCurrent bool) (*PageImage, error) {
+	if err := a.ensureRenderer(); err != nil {
+		return nil, err
+	}
 	a.mu.Lock()
 	if a.openDoc == nil || a.openDoc.Format != library.FormatPDF {
 		a.mu.Unlock()

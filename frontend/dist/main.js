@@ -53,6 +53,8 @@ const state = {
   guideDragging: false,
   clientCache: new Map(), // pageIndex -> rendered bitmap
   zoomLockPage: false, // while zooming, do not change current page from scroll
+  epubPageHeight: 0,
+  pan: { active: false, el: null, x: 0, y: 0, sl: 0, st: 0, moved: false },
 };
 
 function hasWails() {
@@ -144,15 +146,13 @@ function applyFont(id) {
 }
 /**
  * Zoom is visual only for PDFs (scale the existing bitmap).
- * EPUB still uses font/layout scale via --zoom-scale.
- * Never re-renders PDF or changes the current page.
+ * Never re-renders PDF. Pins the current page so zoom cannot change page number.
  */
 function applyZoom(z) {
   const next = Math.min(
     ZOOM_MAX,
     Math.max(ZOOM_MIN, Math.round(z * 100) / 100)
   );
-  const prev = state.zoom;
   state.zoom = next;
   localStorage.setItem("folio.zoom", String(state.zoom));
   document.documentElement.style.setProperty("--zoom-scale", String(state.zoom));
@@ -162,44 +162,77 @@ function applyZoom(z) {
   if (state.view !== "reader" || !state.doc) return;
 
   if (state.doc.format === "pdf") {
-    // Keep the same point under the viewport center while scaling.
-    // Never re-render and never change pageIndex.
-    const stayPage = state.doc.pageIndex;
+    const stayPage = state.doc.pageIndex ?? 0;
     state.zoomLockPage = true;
+
     const vp =
       state.mode === "scroll" ? el.scrollViewport : el.pageViewport;
-    const ax = vp
-      ? (vp.scrollLeft + vp.clientWidth / 2) / Math.max(1, vp.scrollWidth)
-      : 0.5;
-    const ay = vp
-      ? (vp.scrollTop + vp.clientHeight / 2) / Math.max(1, vp.scrollHeight)
-      : 0.5;
 
+    // Anchor to the current page element (scroll) or image point (page mode)
+    let anchorTop = 0;
+    let anchorLeft = 0;
+    let anchorFracY = 0;
+    if (state.mode === "scroll" && vp) {
+      const slot = vp.querySelector(`[data-page="${stayPage}"]`);
+      if (slot) {
+        const vr = vp.getBoundingClientRect();
+        const sr = slot.getBoundingClientRect();
+        anchorTop = sr.top - vr.top; // px of page top relative to viewport
+        anchorLeft = vp.scrollLeft;
+        const h = Math.max(1, sr.height);
+        anchorFracY = Math.min(1, Math.max(0, -anchorTop / h));
+      }
+    } else if (vp) {
+      anchorLeft = vp.scrollLeft;
+      anchorTop = vp.scrollTop;
+      const img = el.pageImage;
+      if (img && img.offsetWidth) {
+        anchorFracY = (vp.scrollTop + vp.clientHeight / 2) / Math.max(1, vp.scrollHeight);
+        anchorLeft = (vp.scrollLeft + vp.clientWidth / 2) / Math.max(1, vp.scrollWidth);
+      }
+    }
+
+    // Disable smooth scroll during restore
+    if (vp) vp.style.scrollBehavior = "auto";
     applyPdfVisualZoom();
 
-    if (vp && prev > 0) {
+    requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        vp.scrollLeft = Math.max(0, ax * vp.scrollWidth - vp.clientWidth / 2);
-        vp.scrollTop = Math.max(0, ay * vp.scrollHeight - vp.clientHeight / 2);
-        if (state.doc) state.doc.pageIndex = stayPage;
+        if (!state.doc) return;
+        state.doc.pageIndex = stayPage;
+
+        if (state.mode === "scroll" && vp) {
+          const slot = vp.querySelector(`[data-page="${stayPage}"]`);
+          if (slot) {
+            // Keep the same relative position within the same page
+            const newTop = slot.offsetTop + slot.offsetHeight * anchorFracY;
+            vp.scrollTop = Math.max(0, newTop - Math.min(anchorTop, vp.clientHeight * 0.35));
+            vp.scrollLeft = anchorLeft;
+          }
+        } else if (vp) {
+          // Page mode: restore center ratio of the single page view
+          vp.scrollLeft = Math.max(0, anchorLeft * vp.scrollWidth - vp.clientWidth / 2);
+          vp.scrollTop = Math.max(0, anchorFracY * vp.scrollHeight - vp.clientHeight / 2);
+        }
+
         updateChromeMeta();
         syncGuideWidth();
-        // release after layout settles
         setTimeout(() => {
           state.zoomLockPage = false;
-        }, 120);
+          if (vp) vp.style.scrollBehavior = "";
+        }, 200);
       });
-    } else {
-      if (state.doc) state.doc.pageIndex = stayPage;
-      syncGuideWidth();
-      state.zoomLockPage = false;
-    }
+    });
     return;
   }
 
-  // EPUB: reflow/pagination scale (not a PDF re-render)
+  // EPUB: font/layout scale
   if (state.mode === "page") {
-    requestAnimationFrame(() => layoutEpubPages());
+    const stay = state.epubPage;
+    requestAnimationFrame(() => {
+      layoutEpubPages();
+      setEpubPage(stay);
+    });
   }
   syncGuideWidth();
 }
@@ -267,7 +300,6 @@ function setChrome(v) {
   el.reader.setAttribute("data-chrome", v ? "visible" : "hidden");
   if (!v) {
     el.fontPanel?.classList.add("is-hidden");
-    // keep guide panel if guide on — still hide font/toc chrome clutter
   }
 }
 
@@ -277,9 +309,8 @@ function showChromeBriefly() {
 
 function hideChrome() {
   setChrome(false);
-  el.tocPanel?.classList.add("is-hidden");
   el.fontPanel?.classList.add("is-hidden");
-  // don't hide guide panel while configuring
+  // Never auto-close the chapters panel — user closes it explicitly
 }
 
 // ─── Toast ───────────────────────────────────────────────────
@@ -316,13 +347,17 @@ function updateChromeMeta() {
   if (state.doc.format === "epub") {
     const ch = (state.epubChapterIndex ?? 0) + 1;
     const chTotal = state.doc.chapterCount || state.doc.pageCount || 1;
+    const chName =
+      state.toc?.[state.epubChapterIndex]?.label ||
+      state.toc?.[state.epubChapterIndex]?.Label ||
+      `Chapter ${ch}`;
     if (state.mode === "page") {
       const p = state.epubPage + 1;
       const pt = Math.max(1, state.epubPageCount);
-      el.readerMeta.textContent = `Chapter ${ch}/${chTotal} · Page ${p}/${pt}`;
-      el.pageIndicator.textContent = `${p} / ${pt}`;
+      el.readerMeta.textContent = `${chName} · Page ${p} of ${pt}`;
+      el.pageIndicator.textContent = `p. ${p}/${pt}`;
     } else {
-      el.readerMeta.textContent = `Chapter ${ch} of ${chTotal}`;
+      el.readerMeta.textContent = `${chName} (${ch}/${chTotal}) · scroll`;
       el.pageIndicator.textContent = `Ch ${ch}/${chTotal}`;
     }
   } else {
@@ -804,7 +839,13 @@ async function loadTOC() {
   el.tocList.innerHTML = "";
   if (!hasWails()) return;
   try {
-    state.toc = (await api().GetEPUBTOC()) || [];
+    const raw = (await api().GetEPUBTOC()) || [];
+    // Wails may expose either JSON tags or Go field names
+    state.toc = raw.map((item, i) => ({
+      index: item.index ?? item.Index ?? i,
+      label: item.label || item.Label || `Chapter ${(item.index ?? item.Index ?? i) + 1}`,
+      href: item.href || item.Href || "",
+    }));
   } catch (_) {
     return;
   }
@@ -812,12 +853,13 @@ async function loadTOC() {
     const li = document.createElement("li");
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.textContent = item.label || `Chapter ${item.index + 1}`;
+    btn.textContent = item.label;
     btn.dataset.index = String(item.index);
     if (item.index === state.epubChapterIndex) btn.classList.add("is-active");
-    btn.addEventListener("click", async () => {
-      el.tocPanel.classList.add("is-hidden");
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
       await loadEpubChapter(item.index);
+      // keep panel open so user can jump again; only close on explicit close
     });
     li.appendChild(btn);
     el.tocList.appendChild(li);
@@ -884,36 +926,47 @@ async function loadEpubChapter(index, opts = {}) {
   }
 }
 
+/**
+ * EPUB page mode: vertical book pages (clip by viewport height), not horizontal columns.
+ * Scroll mode: continuous vertical flow of the chapter.
+ */
 function layoutEpubPages() {
   if (!el.epubContent || state.mode !== "page") return;
   const pages = el.epubPages;
   const content = el.epubContent;
-  const pageW = Math.max(1, pages.clientWidth);
   const pageH = Math.max(1, pages.clientHeight);
-  content.style.transform = "translateX(0)";
-  content.style.height = `${pageH}px`;
-  content.style.width = `${pageW}px`;
-  content.style.columnWidth = `${pageW}px`;
-  content.style.columnGap = "0px";
-  content.style.columnFill = "auto";
-  // Force layout then measure full column strip
-  void content.offsetWidth;
-  const total = content.scrollWidth;
-  state.epubPageCount = Math.max(1, Math.round(total / pageW) || 1);
+  const pageW = Math.max(1, pages.clientWidth);
+
+  // Reset column styles from any older horizontal mode
+  content.style.columnWidth = "auto";
+  content.style.columns = "auto";
+  content.style.columnGap = "0";
+  content.style.width = "100%";
+  content.style.height = "auto";
+  content.style.maxWidth = "none";
+  content.style.transform = "translateY(0)";
+  content.style.padding = "";
+
+  void content.offsetHeight;
+  const totalH = content.scrollHeight;
+  state.epubPageCount = Math.max(1, Math.ceil(totalH / pageH - 0.001));
   if (state.epubPage >= state.epubPageCount) {
     state.epubPage = state.epubPageCount - 1;
   }
+  // Store page height for setEpubPage
+  state.epubPageHeight = pageH;
+  state.epubPageWidth = pageW;
   setEpubPage(state.epubPage);
   syncGuideWidth();
 }
 
 function setEpubPage(n) {
-  const pages = el.epubPages;
   const content = el.epubContent;
-  const pageW = Math.max(1, pages.clientWidth);
+  const pages = el.epubPages;
+  const pageH = state.epubPageHeight || Math.max(1, pages?.clientHeight || 1);
   state.epubPage = Math.max(0, Math.min(n, state.epubPageCount - 1));
-  content.style.transform = `translateX(${-state.epubPage * pageW}px)`;
-  content.style.transition = "transform 180ms cubic-bezier(0.22,1,0.36,1)";
+  content.style.transition = "transform 200ms cubic-bezier(0.22,1,0.36,1)";
+  content.style.transform = `translateY(${-state.epubPage * pageH}px)`;
   updateChromeMeta();
   scheduleProgress(state.epubChapterIndex, currentScrollRatio());
 }
@@ -1036,20 +1089,28 @@ function applyGuideUI() {
 }
 
 function syncGuideWidth() {
-  if (!state.guideOn) return;
-  let w = null;
+  if (!state.guideOn || !el.guide) return;
+  // Align guide left+width to the book edges (not center-of-screen + 50%)
+  let rect = null;
   if (state.doc?.format === "pdf" && state.mode === "page") {
-    w = el.pageFrame?.getBoundingClientRect().width;
+    rect = el.pageFrame?.getBoundingClientRect();
   } else if (state.doc?.format === "pdf" && state.mode === "scroll") {
-    const slot = el.scrollViewport.querySelector(".scroll-page, .scroll-page-slot");
-    w = slot?.getBoundingClientRect().width;
+    const slot =
+      el.scrollViewport.querySelector(`[data-page="${state.doc.pageIndex}"]`) ||
+      el.scrollViewport.querySelector(".scroll-page, .scroll-page-slot");
+    rect = slot?.getBoundingClientRect();
   } else if (state.doc?.format === "epub") {
-    w = el.epubBook?.getBoundingClientRect().width;
+    rect = el.epubBook?.getBoundingClientRect();
   }
-  if (w && w > 40) {
-    el.guide.style.width = `${Math.min(w, window.innerWidth - 16)}px`;
+  if (rect && rect.width > 40) {
+    el.guide.style.left = `${Math.round(rect.left)}px`;
+    el.guide.style.width = `${Math.round(rect.width)}px`;
+    el.guide.style.transform = "none";
+    el.guide.style.right = "auto";
   } else {
-    el.guide.style.width = "";
+    el.guide.style.left = "50%";
+    el.guide.style.width = "min(920px, calc(100vw - 2rem))";
+    el.guide.style.transform = "translateX(-50%)";
   }
 }
 
@@ -1156,10 +1217,19 @@ function bindEvents() {
     el.tocPanel.classList.toggle("is-hidden");
     el.fontPanel.classList.add("is-hidden");
     el.guidePanel.classList.add("is-hidden");
+    // prevent chrome auto-hide from stealing focus while browsing chapters
+    showChromeBriefly();
   });
-  el.tocClose?.addEventListener("click", () =>
-    el.tocPanel.classList.add("is-hidden")
-  );
+  el.tocClose?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    el.tocPanel.classList.add("is-hidden");
+  });
+  // Scrolling the chapter list must not close it
+  el.tocPanel?.addEventListener("wheel", (e) => e.stopPropagation(), {
+    passive: true,
+  });
+  el.tocList?.addEventListener("scroll", (e) => e.stopPropagation());
+  el.tocPanel?.addEventListener("pointerdown", (e) => e.stopPropagation());
   el.guideBtn?.addEventListener("click", (e) => {
     e.stopPropagation();
     toggleGuide();
@@ -1217,6 +1287,12 @@ function bindEvents() {
     if (e.target === el.lightbox || e.target === el.lightboxClose) closeLightbox();
   });
   el.lightboxClose?.addEventListener("click", closeLightbox);
+
+  // Click-drag pan (Android-like) on reading surfaces
+  setupDragPan(el.pageViewport);
+  setupDragPan(el.scrollViewport);
+  setupDragPan(el.epubBook);
+  setupDragPan(el.epubPages);
 
   // Edge hotspots only — do NOT show chrome on content click or general move
   el.hotspotTop?.addEventListener("mouseenter", showChromeBriefly);
@@ -1365,6 +1441,56 @@ function bindEvents() {
   );
 }
 
+/** Pointer drag → scroll (touchpad/Android-style grab). */
+function setupDragPan(node) {
+  if (!node) return;
+  node.classList.add("is-pannable");
+
+  node.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    if (e.target.closest("a, button, input, textarea, .edge-nav, .reading-guide"))
+      return;
+    // Only primary press; ignore when interacting with images lightbox later
+    state.pan.active = true;
+    state.pan.moved = false;
+    state.pan.el = node;
+    state.pan.x = e.clientX;
+    state.pan.y = e.clientY;
+    state.pan.sl = node.scrollLeft;
+    state.pan.st = node.scrollTop;
+    node.setPointerCapture?.(e.pointerId);
+    node.classList.add("is-panning");
+  });
+
+  node.addEventListener("pointermove", (e) => {
+    if (!state.pan.active || state.pan.el !== node) return;
+    const dx = e.clientX - state.pan.x;
+    const dy = e.clientY - state.pan.y;
+    if (Math.abs(dx) + Math.abs(dy) > 3) state.pan.moved = true;
+    // Drag content with finger: move opposite to pointer
+    node.scrollLeft = state.pan.sl - dx;
+    node.scrollTop = state.pan.st - dy;
+  });
+
+  const endPan = (e) => {
+    if (!state.pan.active || state.pan.el !== node) return;
+    state.pan.active = false;
+    node.classList.remove("is-panning");
+    // If we panned, suppress the following click (page turn / hide chrome)
+    if (state.pan.moved) {
+      const block = (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        node.removeEventListener("click", block, true);
+      };
+      node.addEventListener("click", block, true);
+    }
+    state.pan.el = null;
+  };
+  node.addEventListener("pointerup", endPan);
+  node.addEventListener("pointercancel", endPan);
+}
+
 async function boot() {
   applyTheme(state.theme);
   applyFont(state.font);
@@ -1381,6 +1507,7 @@ async function boot() {
     } catch (_) {
       el.version.textContent = "Folio";
     }
+    // Shelf first — do not block UI on PDF engine (lazy-loaded)
     await refreshShelf();
   } else {
     el.version.textContent = "Folio · browser preview";
