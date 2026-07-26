@@ -8,7 +8,7 @@ Folio is a distraction-free app for reading PDFs and EPUBs — built because goo
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go)](https://go.dev/)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey)](#install)
-[![CI](https://github.com/OWNER/folio/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/folio/actions/workflows/ci.yml)
+[![CI](https://github.com/ghaemaghaey/folio/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/folio/actions/workflows/ci.yml)
 
 > Replace `OWNER` in the badge URLs with your GitHub username or org after you push the repo.
 
