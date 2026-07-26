@@ -372,14 +372,22 @@ function openPanel(panelEl) {
 // ─── Toast ───────────────────────────────────────────────────
 
 let toastTimer;
-function toast(msg, isError = false) {
+function toast(msg, isError = false, ms = 3400) {
+  if (!el.toast) return;
   el.toast.textContent = msg;
   el.toast.hidden = false;
-  el.toast.classList.toggle("is-error", isError);
+  el.toast.classList.toggle("is-error", !!isError);
   if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => {
-    el.toast.hidden = true;
-  }, 3400);
+  if (ms > 0) {
+    toastTimer = setTimeout(() => {
+      el.toast.hidden = true;
+    }, ms);
+  }
+}
+function hideToast() {
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = null;
+  if (el.toast) el.toast.hidden = true;
 }
 
 // ─── Progress / meta ─────────────────────────────────────────
@@ -397,23 +405,32 @@ async function flushProgress() {
     clearTimeout(state.progressTimer);
     state.progressTimer = null;
   }
-  if (!hasWails() || !state.doc || !state.doc.id) return;
+  if (!hasWails() || !state.doc) return;
+  const id = state.doc.id;
+  if (!id) {
+    console.warn("flushProgress: missing book id");
+    return;
+  }
   try {
+    let page = 0;
+    let chapter = 0;
+    let sub = 0;
+    let scroll = 0;
     if (state.doc.format === "epub") {
       updateEpubPositionFromScroll();
-      await api().SaveProgress(
-        state.globalPage | 0,
-        state.epubChapterIndex | 0,
-        state.globalPage | 0,
-        currentScrollRatio() || 0
-      );
+      page = state.globalPage | 0;
+      chapter = state.epubChapterIndex | 0;
+      sub = state.epubPage | 0;
+      scroll = currentScrollRatio() || 0;
     } else {
-      await api().SaveProgress(
-        (state.doc.pageIndex || 0) | 0,
-        0,
-        0,
-        currentScrollRatio() || 0
-      );
+      page = Math.max(0, state.doc.pageIndex | 0);
+      scroll = currentScrollRatio() || 0;
+    }
+    // Prefer explicit book id so progress never depends on openDoc races
+    if (typeof api().SaveBookProgress === "function") {
+      await api().SaveBookProgress(id, page, chapter, sub, scroll);
+    } else {
+      await api().SaveProgress(page, chapter, sub, scroll);
     }
   } catch (err) {
     console.error("SaveProgress failed", err);
@@ -591,13 +608,28 @@ async function remapBook(id) {
 }
 async function openBookId(id) {
   try {
-    toast("Opening…");
+    toast("Opening…", false, 0); // stay until we hide it
     const doc = await api().OpenBook(id);
     if (!doc) {
       toast("Could not open book.", true);
       return;
     }
+    // Re-read saved progress from library (source of truth)
+    let savedPage = doc.pageIndex ?? doc.PageIndex ?? 0;
+    let savedScroll = doc.lastScroll ?? doc.LastScroll ?? 0;
+    try {
+      if (typeof api().GetBookProgress === "function") {
+        const prog = await api().GetBookProgress(doc.id || doc.ID || id);
+        if (prog && (prog.page != null || prog.Page != null)) {
+          savedPage = prog.page ?? prog.Page ?? savedPage;
+          savedScroll = prog.scroll ?? prog.Scroll ?? savedScroll;
+        }
+      }
+    } catch (_) {}
+    doc.pageIndex = savedPage | 0;
+    doc.lastScroll = savedScroll || 0;
     await enterDocument(doc);
+    hideToast();
   } catch (err) {
     console.error("OpenBook", err);
     toast(String(err?.message || err || "Open failed"), true);
@@ -763,23 +795,39 @@ async function fetchPDFPage(index, { setCurrent = true } = {}) {
     return hit;
   }
   if (!hasWails()) return null;
-  const page = await api().RenderPDFPage(index, dpi());
+  // Prefetch must NOT move the "current page" cursor on the backend
+  let page;
+  if (setCurrent) {
+    page = await api().RenderPDFPage(index, dpi());
+  } else if (typeof api().PrefetchPDFPage === "function") {
+    page = await api().PrefetchPDFPage(index, dpi());
+  } else {
+    // Fallback: only warm disk/memory via bulk prefetch API
+    await api().PrefetchPDFPages([index], dpi());
+    page = await api().RenderPDFPage(index, dpi());
+    // Restore cursor if we had to use RenderPDFPage
+    if (state.doc) {
+      try {
+        await api().RenderPDFPage(state.doc.pageIndex | 0, dpi());
+      } catch (_) {}
+    }
+  }
+  if (!page) return null;
   const packed = {
-    dataURL: page.dataURL,
-    pageIndex: page.pageIndex,
-    pageCount: page.pageCount,
-    width: page.width,
-    height: page.height,
+    dataURL: page.dataURL ?? page.DataURL,
+    pageIndex: page.pageIndex ?? page.PageIndex ?? index,
+    pageCount: page.pageCount ?? page.PageCount ?? state.doc?.pageCount ?? 1,
+    width: page.width ?? page.Width,
+    height: page.height ?? page.Height,
   };
   state.clientCache.set(key, packed);
-  // bound client cache
   if (state.clientCache.size > 60) {
     const first = state.clientCache.keys().next().value;
     state.clientCache.delete(first);
   }
   if (setCurrent && state.doc) {
-    state.doc.pageIndex = page.pageIndex;
-    state.doc.pageCount = page.pageCount;
+    state.doc.pageIndex = packed.pageIndex;
+    state.doc.pageCount = packed.pageCount;
   }
   return packed;
 }
@@ -789,9 +837,11 @@ function prefetchAround(index) {
   const pages = [index - 1, index + 1, index + 2, index - 2].filter(
     (p) => p >= 0 && p < state.doc.pageCount
   );
-  // Backend cache warm
-  api().PrefetchPDFPages(pages, dpi()).catch?.(() => {});
-  // Also fill client cache
+  // Backend disk/memory warm — does not change current page
+  try {
+    api().PrefetchPDFPages(pages, dpi());
+  } catch (_) {}
+  // Client cache warm without moving current page
   for (const p of pages) {
     if (!state.clientCache.has(cacheKey(p))) {
       fetchPDFPage(p, { setCurrent: false }).catch(() => {});
@@ -802,7 +852,6 @@ function prefetchAround(index) {
 async function renderPage() {
   if (!hasWails() || !state.doc) return;
   if (state.doc.format !== "pdf") return;
-  // Allow retry even if a previous render was marked busy
   if (state.rendering) {
     state.rendering = false;
   }
@@ -810,20 +859,23 @@ async function renderPage() {
   el.pageViewport?.classList.remove("is-hidden");
   el.scrollViewport?.classList.add("is-hidden");
   el.epubViewport?.classList.add("is-hidden");
-  const showSpinner = !state.clientCache.has(cacheKey(state.doc.pageIndex));
+  const target = Math.max(0, state.doc.pageIndex | 0);
+  const showSpinner = !state.clientCache.has(cacheKey(target));
   if (showSpinner && el.pageLoading) el.pageLoading.hidden = false;
   try {
-    const page = await fetchPDFPage(state.doc.pageIndex, { setCurrent: true });
+    const page = await fetchPDFPage(target, { setCurrent: true });
     if (!page || !page.dataURL) {
       toast("PDF page was empty — try reopening the file.", true);
       return;
     }
+    // Keep the page we asked for (ignore prefetch races)
+    state.doc.pageIndex = target;
+    state.doc.pageCount = page.pageCount || state.doc.pageCount;
     await presentPage(page);
-    state.doc.pageIndex = page.pageIndex;
-    state.doc.pageCount = page.pageCount;
     updateChromeMeta();
-    scheduleProgress();
-    prefetchAround(page.pageIndex);
+    // Persist immediately so reopen lands here
+    await flushProgress();
+    prefetchAround(target);
   } catch (err) {
     console.error("renderPage", err);
     toast(String(err?.message || err || "PDF render failed"), true);
@@ -891,6 +943,7 @@ async function goRelative(dir) {
   if (next < 0 || next >= state.doc.pageCount) return;
   state.doc.pageIndex = next;
   await renderPage();
+  await flushProgress();
 }
 
 async function reloadScroll(clear = true) {

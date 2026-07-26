@@ -186,7 +186,7 @@ func (a *App) ResolveEPUBLink(href string) (map[string]interface{}, error) {
 	}, nil
 }
 
-// PrefetchPDFPages warms the page cache (non-blocking from UI perspective when awaited in parallel).
+// PrefetchPDFPages warms the page cache without changing the current page cursor.
 func (a *App) PrefetchPDFPages(pages []int, dpi int) {
 	if err := a.ensureRenderer(); err != nil {
 		return
@@ -202,12 +202,13 @@ func (a *App) PrefetchPDFPages(pages []int, dpi int) {
 		return
 	}
 	if dpi <= 0 {
-		dpi = 120
+		dpi = 128
 	}
 	for _, p := range pages {
 		if p < 0 {
 			continue
 		}
+		// Intentionally does NOT touch openDoc.PageIndex
 		_, _, _, _ = renderer.RenderPage(path, p, dpi)
 	}
 }
@@ -326,19 +327,31 @@ func (a *App) RemoveFromLibrary(id string) error {
 	return lib.Remove(id)
 }
 
-// SaveProgress persists reading position.
+// SaveProgress persists reading position for the currently open document.
 // pageIndex: PDF page or EPUB global page. chapter/subPage used for EPUB restore.
 func (a *App) SaveProgress(pageIndex, chapter, subPage int, scroll float64) error {
 	a.mu.Lock()
 	doc := a.openDoc
+	id := ""
 	if doc != nil {
-		// Keep backend cursor in sync for any future reads
-		doc.PageIndex = pageIndex
+		id = doc.ID
+		// Only update in-memory cursor for PDF page index (not prefetch neighbors)
+		if doc.Format == library.FormatPDF && pageIndex >= 0 {
+			doc.PageIndex = pageIndex
+		}
 	}
 	a.mu.Unlock()
-	lib := a.libOrNil()
-	if doc == nil || doc.ID == "" || lib == nil {
+	if id == "" {
 		return nil
+	}
+	return a.SaveBookProgress(id, pageIndex, chapter, subPage, scroll)
+}
+
+// SaveBookProgress persists position by library id (reliable even if openDoc is racing).
+func (a *App) SaveBookProgress(bookID string, pageIndex, chapter, subPage int, scroll float64) error {
+	lib := a.libOrNil()
+	if lib == nil || bookID == "" {
+		return fmt.Errorf("library not ready")
 	}
 	if pageIndex < 0 {
 		pageIndex = 0
@@ -349,22 +362,31 @@ func (a *App) SaveProgress(pageIndex, chapter, subPage int, scroll float64) erro
 	if subPage < 0 {
 		subPage = 0
 	}
-	return lib.UpdateProgress(doc.ID, pageIndex, chapter, subPage, scroll)
+	return lib.UpdateProgress(bookID, pageIndex, chapter, subPage, scroll)
 }
 
 // GetProgress returns saved position for the open book (or zeros).
 func (a *App) GetProgress() map[string]interface{} {
 	a.mu.Lock()
 	doc := a.openDoc
+	id := ""
+	if doc != nil {
+		id = doc.ID
+	}
 	a.mu.Unlock()
+	return a.GetBookProgress(id)
+}
+
+// GetBookProgress returns saved position for a shelf id.
+func (a *App) GetBookProgress(bookID string) map[string]interface{} {
 	out := map[string]interface{}{
-		"page": 0, "chapter": 0, "subPage": 0, "scroll": 0.0,
+		"page": 0, "chapter": 0, "subPage": 0, "scroll": 0.0, "id": bookID,
 	}
 	lib := a.libOrNil()
-	if doc == nil || doc.ID == "" || lib == nil {
+	if lib == nil || bookID == "" {
 		return out
 	}
-	if b, ok := lib.Get(doc.ID); ok {
+	if b, ok := lib.Get(bookID); ok {
 		out["page"] = b.LastPage
 		out["chapter"] = b.LastChapter
 		out["subPage"] = b.LastSubPage
@@ -615,10 +637,14 @@ func (a *App) RenderCurrentPage(dpi int) (*PageImage, error) {
 	return a.renderPDFPage(idx, dpi, true)
 }
 
-// RenderPDFPage renders an arbitrary PDF page (for scroll mode).
-// setCurrent: when false, does not move the saved reading position (prefetch).
+// RenderPDFPage renders a PDF page and marks it as the current page.
 func (a *App) RenderPDFPage(pageIndex int, dpi int) (*PageImage, error) {
 	return a.renderPDFPage(pageIndex, dpi, true)
+}
+
+// PrefetchPDFPage renders a page into cache without changing the current page.
+func (a *App) PrefetchPDFPage(pageIndex int, dpi int) (*PageImage, error) {
+	return a.renderPDFPage(pageIndex, dpi, false)
 }
 
 func (a *App) renderPDFPage(pageIndex int, dpi int, setCurrent bool) (*PageImage, error) {
