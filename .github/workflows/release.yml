@@ -1,8 +1,13 @@
 name: Release
 
 # Push a version tag to publish Windows + Linux binaries to GitHub Releases:
-#   git tag v0.6.0
-#   git push origin v0.6.0
+#   git tag v0.6.2
+#   git push origin v0.6.2
+#
+# Assets:
+#   folio-windows-amd64.exe
+#   folio-linux-amd64              (Ubuntu 22.04 / broader glibc baseline)
+#   folio-linux-amd64-debian-trixie (Debian 13 / Trixie — webkit2gtk 4.1)
 
 on:
   push:
@@ -14,19 +19,21 @@ permissions:
 
 jobs:
   release:
-    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    name: Build ${{ matrix.label }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
+          - label: windows-amd64
+            os: windows-latest
             goos: windows
             goarch: amd64
             asset: folio-windows-amd64.exe
             ldflags: -s -w -H windowsgui
             cgo: "0"
-          - os: ubuntu-22.04
+          - label: linux-amd64
+            os: ubuntu-22.04
             goos: linux
             goarch: amd64
             asset: folio-linux-amd64
@@ -78,9 +85,59 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # Match Debian 13 (Trixie) runtime libs used on developer laptops.
+  release-debian-trixie:
+    name: Build debian-trixie-amd64
+    runs-on: ubuntu-latest
+    container: debian:trixie
+
+    steps:
+      - name: Install build dependencies
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates curl git \
+            build-essential pkg-config \
+            gcc g++ \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+          cache: true
+
+      - name: Build
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          go build -tags production -ldflags "-s -w" \
+            -o dist/folio-linux-amd64-debian-trixie .
+          ls -la dist/
+
+      - name: Create / update GitHub Release and upload asset
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Folio ${{ github.ref_name }}
+          files: dist/folio-linux-amd64-debian-trixie
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   checksums:
     name: Upload SHA256SUMS
-    needs: release
+    needs: [release, release-debian-trixie]
     runs-on: ubuntu-latest
     steps:
       - name: Download release assets and upload checksums

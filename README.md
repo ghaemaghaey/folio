@@ -62,8 +62,9 @@ _Add screenshots here after release (`docs/screenshots/`)._
 1. Open **[Releases](https://github.com/OWNER/folio/releases)** on GitHub.
 2. Download for your OS:
    - **Windows:** `folio-windows-amd64.exe` (or the zip from the release)
-   - **Linux:** `folio-linux-amd64`
-3. Run the binary (Linux: `chmod +x folio-linux-amd64`).
+   - **Linux (generic / Ubuntu 22.04 CI):** `folio-linux-amd64`
+   - **Debian 13 (Trixie):** `folio-linux-amd64-debian-trixie` — prefer this on Trixie laptops
+3. Run the binary (Linux: `chmod +x folio-linux-amd64*` ).
 
 Windows builds are linked as a **GUI app** (no console window).
 
@@ -173,8 +174,8 @@ Pushing a version tag runs the **Release** workflow, which builds Windows and Li
 
 ```bash
 # After commits are on the default branch:
-git tag v0.6.0
-git push origin v0.6.0
+git tag v0.6.2
+git push origin v0.6.2
 ```
 
 Workflow: [`.github/workflows/release.yml`](.github/workflows/release.yml)
@@ -182,7 +183,8 @@ Workflow: [`.github/workflows/release.yml`](.github/workflows/release.yml)
 Artifacts typically include:
 
 - `folio-windows-amd64.exe`
-- `folio-linux-amd64`
+- `folio-linux-amd64` (Ubuntu 22.04 runner)
+- `folio-linux-amd64-debian-trixie` (built in `debian:trixie` container)
 - checksums (`SHA256SUMS`)
 
 ### Manual publish with GitHub CLI (`gh`)
