@@ -76,6 +76,13 @@ func (a *App) startup(ctx context.Context) {
 	// Do not block the first paint: library + PDFium load lazily on demand.
 	// Kick library open in the background so the shelf is ready moments later.
 	go a.ensureLibrary()
+	// Warm PDFium WASM in the background so the first PDF open is much faster.
+	// This is the main "first run is slow" cost (WASM compile + pool start).
+	go func() {
+		if err := a.ensureRenderer(); err != nil {
+			runtime.LogWarningf(ctx, "pdfium warm-up: %v", err)
+		}
+	}()
 }
 
 func (a *App) ensureLibrary() {
@@ -102,18 +109,29 @@ func (a *App) libOrNil() *library.Store {
 	return a.lib
 }
 
-// ensureRenderer lazily starts go-pdfium (WASM). Safe to call often.
+// ensureRenderer lazily starts go-pdfium (WASM). Never holds a.mu during WASM init
+// (that blocked every UI call and made open/startup feel frozen).
 func (a *App) ensureRenderer() error {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	if a.renderer != nil {
+		a.mu.Unlock()
 		return nil
 	}
+	a.mu.Unlock()
+
 	r, err := pdf.NewRenderer()
 	if err != nil {
 		return fmt.Errorf("pdfium init: %w", err)
 	}
-	a.renderer = r
+
+	a.mu.Lock()
+	if a.renderer == nil {
+		a.renderer = r
+	} else {
+		// Another goroutine won the race — drop ours
+		_ = r.Close()
+	}
+	a.mu.Unlock()
 	return nil
 }
 
@@ -128,7 +146,7 @@ func (a *App) shutdown(ctx context.Context) {
 
 // AppVersion returns the app version string.
 func (a *App) AppVersion() string {
-	return "0.6.0"
+	return "0.6.1"
 }
 
 // OpenExternalURL opens http(s)/mailto links in the OS default browser.
@@ -175,7 +193,7 @@ func (a *App) ResolveEPUBLink(href string) (map[string]interface{}, error) {
 	}, nil
 }
 
-// PrefetchPDFPages warms the page cache (non-blocking from UI perspective when awaited in parallel).
+// PrefetchPDFPages warms the page cache without changing the current page cursor.
 func (a *App) PrefetchPDFPages(pages []int, dpi int) {
 	if err := a.ensureRenderer(); err != nil {
 		return
@@ -191,12 +209,13 @@ func (a *App) PrefetchPDFPages(pages []int, dpi int) {
 		return
 	}
 	if dpi <= 0 {
-		dpi = 120
+		dpi = 128
 	}
 	for _, p := range pages {
 		if p < 0 {
 			continue
 		}
+		// Intentionally does NOT touch openDoc.PageIndex
 		_, _, _, _ = renderer.RenderPage(path, p, dpi)
 	}
 }
@@ -315,19 +334,31 @@ func (a *App) RemoveFromLibrary(id string) error {
 	return lib.Remove(id)
 }
 
-// SaveProgress persists reading position.
+// SaveProgress persists reading position for the currently open document.
 // pageIndex: PDF page or EPUB global page. chapter/subPage used for EPUB restore.
 func (a *App) SaveProgress(pageIndex, chapter, subPage int, scroll float64) error {
 	a.mu.Lock()
 	doc := a.openDoc
+	id := ""
 	if doc != nil {
-		// Keep backend cursor in sync for any future reads
-		doc.PageIndex = pageIndex
+		id = doc.ID
+		// Only update in-memory cursor for PDF page index (not prefetch neighbors)
+		if doc.Format == library.FormatPDF && pageIndex >= 0 {
+			doc.PageIndex = pageIndex
+		}
 	}
 	a.mu.Unlock()
-	lib := a.libOrNil()
-	if doc == nil || doc.ID == "" || lib == nil {
+	if id == "" {
 		return nil
+	}
+	return a.SaveBookProgress(id, pageIndex, chapter, subPage, scroll)
+}
+
+// SaveBookProgress persists position by library id (reliable even if openDoc is racing).
+func (a *App) SaveBookProgress(bookID string, pageIndex, chapter, subPage int, scroll float64) error {
+	lib := a.libOrNil()
+	if lib == nil || bookID == "" {
+		return fmt.Errorf("library not ready")
 	}
 	if pageIndex < 0 {
 		pageIndex = 0
@@ -338,22 +369,31 @@ func (a *App) SaveProgress(pageIndex, chapter, subPage int, scroll float64) erro
 	if subPage < 0 {
 		subPage = 0
 	}
-	return lib.UpdateProgress(doc.ID, pageIndex, chapter, subPage, scroll)
+	return lib.UpdateProgress(bookID, pageIndex, chapter, subPage, scroll)
 }
 
 // GetProgress returns saved position for the open book (or zeros).
 func (a *App) GetProgress() map[string]interface{} {
 	a.mu.Lock()
 	doc := a.openDoc
+	id := ""
+	if doc != nil {
+		id = doc.ID
+	}
 	a.mu.Unlock()
+	return a.GetBookProgress(id)
+}
+
+// GetBookProgress returns saved position for a shelf id.
+func (a *App) GetBookProgress(bookID string) map[string]interface{} {
 	out := map[string]interface{}{
-		"page": 0, "chapter": 0, "subPage": 0, "scroll": 0.0,
+		"page": 0, "chapter": 0, "subPage": 0, "scroll": 0.0, "id": bookID,
 	}
 	lib := a.libOrNil()
-	if doc == nil || doc.ID == "" || lib == nil {
+	if lib == nil || bookID == "" {
 		return out
 	}
-	if b, ok := lib.Get(doc.ID); ok {
+	if b, ok := lib.Get(bookID); ok {
 		out["page"] = b.LastPage
 		out["chapter"] = b.LastChapter
 		out["subPage"] = b.LastSubPage
@@ -368,14 +408,15 @@ func (a *App) openPDF(path string, existingID string) (*DocumentInfo, error) {
 	}
 	lib := a.libOrNil()
 
+	// Snapshot renderer without holding a.mu during Open/Render (those are slow).
 	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	if a.renderer == nil {
+	renderer := a.renderer
+	a.mu.Unlock()
+	if renderer == nil {
 		return nil, fmt.Errorf("PDF engine is not ready")
 	}
 
-	count, err := a.renderer.Open(path)
+	count, err := renderer.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open PDF: %w", err)
 	}
@@ -397,7 +438,6 @@ func (a *App) openPDF(path string, existingID string) (*DocumentInfo, error) {
 		Fingerprint: meta.Fingerprint,
 	}
 
-	// Preserve last page when reopening known book
 	lastPage := 0
 	lastScroll := 0.0
 	if lib != nil {
@@ -426,7 +466,6 @@ func (a *App) openPDF(path string, existingID string) (*DocumentInfo, error) {
 		if lastPage < 0 {
 			lastPage = 0
 		}
-		// Upsert preserves library progress fields.
 		saved, err := lib.Upsert(book)
 		if err != nil {
 			runtime.LogWarningf(a.ctx, "library upsert: %v", err)
@@ -437,17 +476,10 @@ func (a *App) openPDF(path string, existingID string) (*DocumentInfo, error) {
 		}
 	}
 
-	// Thumbnail cover from page 0 (best-effort)
-	if lib != nil && book.CoverDataURL == "" {
-		if cover, _, _, err := a.renderer.RenderPage(path, 0, 48); err == nil {
-			book.CoverDataURL = cover
-			if saved, err := lib.Upsert(book); err == nil {
-				book = saved
-				lastPage = book.LastPage
-				lastScroll = book.LastScroll
-			}
-		}
-	}
+	// Cover is optional — never block open on thumbnail render.
+	// Generate in background after the document is registered.
+	needCover := lib != nil && book.CoverDataURL == ""
+	bookID := book.ID
 
 	if lastPage >= count {
 		lastPage = count - 1
@@ -456,6 +488,7 @@ func (a *App) openPDF(path string, existingID string) (*DocumentInfo, error) {
 		lastPage = 0
 	}
 
+	a.mu.Lock()
 	a.epubBook = nil
 	a.openDoc = &openDocument{
 		ID:        book.ID,
@@ -464,6 +497,22 @@ func (a *App) openPDF(path string, existingID string) (*DocumentInfo, error) {
 		Format:    library.FormatPDF,
 		PageCount: count,
 		PageIndex: lastPage,
+	}
+	a.mu.Unlock()
+
+	if needCover && bookID != "" {
+		go func(p, id string) {
+			cover, _, _, err := renderer.RenderPage(p, 0, 48)
+			if err != nil || cover == "" || lib == nil {
+				return
+			}
+			b, ok := lib.Get(id)
+			if !ok || b.CoverDataURL != "" {
+				return
+			}
+			b.CoverDataURL = cover
+			_, _ = lib.Upsert(b)
+		}(path, bookID)
 	}
 
 	return &DocumentInfo{
@@ -583,39 +632,26 @@ func (a *App) openEPUB(path string, existingID string) (*DocumentInfo, error) {
 
 // RenderCurrentPage renders the active PDF page at dpi (zoom applied by caller via dpi).
 func (a *App) RenderCurrentPage(dpi int) (*PageImage, error) {
-	if err := a.ensureRenderer(); err != nil {
-		return nil, err
+	if dpi <= 0 {
+		dpi = 128
 	}
 	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	if a.openDoc == nil || a.openDoc.Format != library.FormatPDF {
-		return nil, fmt.Errorf("no PDF open")
+	idx := 0
+	if a.openDoc != nil {
+		idx = a.openDoc.PageIndex
 	}
-	if a.renderer == nil {
-		return nil, fmt.Errorf("PDF engine is not ready")
-	}
-	if dpi <= 0 {
-		dpi = 144
-	}
-
-	img, w, h, err := a.renderer.RenderPage(a.openDoc.Path, a.openDoc.PageIndex, dpi)
-	if err != nil {
-		return nil, err
-	}
-	return &PageImage{
-		DataURL:   img,
-		PageIndex: a.openDoc.PageIndex,
-		PageCount: a.openDoc.PageCount,
-		Width:     w,
-		Height:    h,
-	}, nil
+	a.mu.Unlock()
+	return a.renderPDFPage(idx, dpi, true)
 }
 
-// RenderPDFPage renders an arbitrary PDF page (for scroll mode).
-// setCurrent: when false, does not move the saved reading position (prefetch).
+// RenderPDFPage renders a PDF page and marks it as the current page.
 func (a *App) RenderPDFPage(pageIndex int, dpi int) (*PageImage, error) {
 	return a.renderPDFPage(pageIndex, dpi, true)
+}
+
+// PrefetchPDFPage renders a page into cache without changing the current page.
+func (a *App) PrefetchPDFPage(pageIndex int, dpi int) (*PageImage, error) {
+	return a.renderPDFPage(pageIndex, dpi, false)
 }
 
 func (a *App) renderPDFPage(pageIndex int, dpi int, setCurrent bool) (*PageImage, error) {
@@ -748,18 +784,21 @@ func (a *App) GetEPUBChapter(index int) (*EPUBChapterDTO, error) {
 }
 
 // GetAllEPUBChapters returns every spine item's HTML for continuous full-book scroll.
+// Does not hold the app mutex for the whole book (avoids UI freezes / deadlocks).
 func (a *App) GetAllEPUBChapters() ([]EPUBChapterDTO, error) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.epubBook == nil || a.openDoc == nil || a.openDoc.Format != library.FormatEPUB {
+	book := a.epubBook
+	doc := a.openDoc
+	a.mu.Unlock()
+
+	if book == nil || doc == nil || doc.Format != library.FormatEPUB {
 		return nil, fmt.Errorf("no EPUB open")
 	}
-	n := a.epubBook.ChapterCount()
+	n := book.ChapterCount()
 	out := make([]EPUBChapterDTO, 0, n)
 	for i := 0; i < n; i++ {
-		ch, err := a.epubBook.GetChapter(i)
+		ch, err := book.GetChapter(i)
 		if err != nil {
-			// skip broken spine items but keep indices stable with a placeholder
 			out = append(out, EPUBChapterDTO{
 				Index:        i,
 				Label:        fmt.Sprintf("Chapter %d", i+1),
@@ -776,6 +815,16 @@ func (a *App) GetAllEPUBChapters() ([]EPUBChapterDTO, error) {
 		})
 	}
 	return out, nil
+}
+
+// GetEPUBChapterCount returns spine length for progressive loading.
+func (a *App) GetEPUBChapterCount() (int, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.epubBook == nil {
+		return 0, fmt.Errorf("no EPUB open")
+	}
+	return a.epubBook.ChapterCount(), nil
 }
 
 // GetDocument returns current document info.
