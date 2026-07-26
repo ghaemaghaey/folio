@@ -129,7 +129,8 @@ jobs:
 
               # -buildvcs=false: mounted .git often fails "error obtaining VCS status"
               # inside Docker (exit 128 / safe.directory).
-              go build -buildvcs=false -tags production -ldflags "-s -w" \
+              # webkit2_41: Debian Trixie has webkit2gtk-4.1 only (no 4.0 .pc).
+              go build -buildvcs=false -tags "production,webkit2_41" -ldflags "-s -w" \
                 -o dist/folio-linux-amd64-debian-trixie .
               ls -la dist/folio-linux-amd64-debian-trixie
             '
