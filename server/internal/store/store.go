@@ -1,148 +1,226 @@
 package store
 
 import (
-	"encoding/json"
+	"database/sql"
+	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
-	"sync"
+	"strings"
 	"time"
+
+	"github.com/ghaemaghaey/folio/server/internal/models"
 )
 
-// Book is cloud/library metadata (not the file bytes).
-type Book struct {
-	ID          string  `json:"id"`
-	Title       string  `json:"title"`
-	Format      string  `json:"format"` // pdf | epub
-	Fingerprint string  `json:"fingerprint,omitempty"`
-	PageCount   int     `json:"pageCount,omitempty"`
-	UpdatedAt   int64   `json:"updatedAt"`
-}
+var (
+	ErrNotFound      = errors.New("not found")
+	ErrConflict      = errors.New("conflict")
+	ErrInvalidInput  = errors.New("invalid input")
+)
 
-// Progress is multi-device reading position.
-type Progress struct {
-	BookID      string  `json:"bookId"`
-	Page        int     `json:"page"`
-	Chapter     int     `json:"chapter"`
-	SubPage     int     `json:"subPage"`
-	Scroll      float64 `json:"scroll"`
-	Device      string  `json:"device,omitempty"`
-	UpdatedAt   int64   `json:"updatedAt"`
-}
-
-type fileData struct {
-	Version  int                 `json:"version"`
-	Books    map[string]Book     `json:"books"`
-	Progress map[string]Progress `json:"progress"`
-}
-
-// Store is a simple JSON-backed persistence layer.
+// Store wraps SQL operations for users, books, and positions.
 type Store struct {
-	path string
-	mu   sync.Mutex
-	data fileData
+	db *sql.DB
 }
 
-// Open loads or creates the store under dir/store.json.
-func Open(dir string) (*Store, error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, err
+func New(db *sql.DB) *Store {
+	return &Store{db: db}
+}
+
+// --- Users ---
+
+func (s *Store) CreateUser(username, passwordHash string) (models.User, error) {
+	username = strings.TrimSpace(username)
+	if username == "" || passwordHash == "" {
+		return models.User{}, ErrInvalidInput
 	}
-	path := filepath.Join(dir, "store.json")
-	s := &Store{
-		path: path,
-		data: fileData{
-			Version:  1,
-			Books:    map[string]Book{},
-			Progress: map[string]Progress{},
-		},
-	}
-	b, err := os.ReadFile(path)
+	res, err := s.db.Exec(
+		`INSERT INTO users (username, password_hash) VALUES (?, ?)`,
+		username, passwordHash,
+	)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return s, s.saveLocked()
+		if strings.Contains(strings.ToLower(err.Error()), "unique") {
+			return models.User{}, ErrConflict
 		}
-		return nil, err
+		return models.User{}, err
 	}
-	if len(b) > 0 {
-		if err := json.Unmarshal(b, &s.data); err != nil {
-			return nil, fmt.Errorf("parse store: %w", err)
-		}
-	}
-	if s.data.Books == nil {
-		s.data.Books = map[string]Book{}
-	}
-	if s.data.Progress == nil {
-		s.data.Progress = map[string]Progress{}
-	}
-	return s, nil
+	id, _ := res.LastInsertId()
+	return models.User{ID: id, Username: username}, nil
 }
 
-func (s *Store) saveLocked() error {
-	tmp := s.path + ".tmp"
-	b, err := json.MarshalIndent(s.data, "", "  ")
+func (s *Store) GetUserByUsername(username string) (models.User, error) {
+	var u models.User
+	err := s.db.QueryRow(
+		`SELECT id, username, password_hash, COALESCE(created_at,'') FROM users WHERE username = ?`,
+		username,
+	).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return models.User{}, ErrNotFound
+	}
+	return u, err
+}
+
+// --- Books ---
+
+func (s *Store) GetBook(fingerprint string) (models.Book, error) {
+	var b models.Book
+	var calibreID sql.NullInt64
+	err := s.db.QueryRow(
+		`SELECT fingerprint, calibre_book_id, COALESCE(title,''), COALESCE(author,''),
+		        COALESCE(format,''), COALESCE(uploaded_by,0), COALESCE(created_at,'')
+		 FROM books WHERE fingerprint = ?`,
+		fingerprint,
+	).Scan(&b.Fingerprint, &calibreID, &b.Title, &b.Author, &b.Format, &b.UploadedBy, &b.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return models.Book{}, ErrNotFound
+	}
 	if err != nil {
-		return err
+		return models.Book{}, err
 	}
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.path)
-}
-
-func (s *Store) ListBooks() []Book {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := make([]Book, 0, len(s.data.Books))
-	for _, b := range s.data.Books {
-		out = append(out, b)
-	}
-	return out
-}
-
-func (s *Store) GetBook(id string) (Book, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	b, ok := s.data.Books[id]
-	return b, ok
-}
-
-func (s *Store) UpsertBook(b Book) (Book, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	b.UpdatedAt = time.Now().Unix()
-	s.data.Books[b.ID] = b
-	if err := s.saveLocked(); err != nil {
-		return Book{}, err
+	if calibreID.Valid {
+		v := calibreID.Int64
+		b.CalibreBookID = &v
 	}
 	return b, nil
 }
 
-func (s *Store) DeleteBook(id string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, ok := s.data.Books[id]; !ok {
-		return fmt.Errorf("book not found")
+func (s *Store) ListBooks() ([]models.Book, error) {
+	rows, err := s.db.Query(
+		`SELECT fingerprint, calibre_book_id, COALESCE(title,''), COALESCE(author,''),
+		        COALESCE(format,''), COALESCE(uploaded_by,0), COALESCE(created_at,'')
+		 FROM books ORDER BY created_at DESC`,
+	)
+	if err != nil {
+		return nil, err
 	}
-	delete(s.data.Books, id)
-	delete(s.data.Progress, id)
-	return s.saveLocked()
+	defer rows.Close()
+	var out []models.Book
+	for rows.Next() {
+		var b models.Book
+		var calibreID sql.NullInt64
+		if err := rows.Scan(&b.Fingerprint, &calibreID, &b.Title, &b.Author, &b.Format, &b.UploadedBy, &b.CreatedAt); err != nil {
+			return nil, err
+		}
+		if calibreID.Valid {
+			v := calibreID.Int64
+			b.CalibreBookID = &v
+		}
+		out = append(out, b)
+	}
+	if out == nil {
+		out = []models.Book{}
+	}
+	return out, rows.Err()
 }
 
-func (s *Store) GetProgress(bookID string) (Progress, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	p, ok := s.data.Progress[bookID]
-	return p, ok
+func (s *Store) InsertBook(b models.Book) (models.Book, error) {
+	if b.Fingerprint == "" {
+		return models.Book{}, ErrInvalidInput
+	}
+	var calibre any
+	if b.CalibreBookID != nil {
+		calibre = *b.CalibreBookID
+	}
+	_, err := s.db.Exec(
+		`INSERT INTO books (fingerprint, calibre_book_id, title, author, format, uploaded_by)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		b.Fingerprint, calibre, b.Title, b.Author, b.Format, b.UploadedBy,
+	)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "unique") {
+			return s.GetBook(b.Fingerprint)
+		}
+		return models.Book{}, err
+	}
+	return s.GetBook(b.Fingerprint)
 }
 
-func (s *Store) SetProgress(p Progress) (Progress, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	p.UpdatedAt = time.Now().Unix()
-	s.data.Progress[p.BookID] = p
-	if err := s.saveLocked(); err != nil {
-		return Progress{}, err
+// --- Reading positions ---
+
+func (s *Store) UpsertProgress(userID int64, fingerprint, position string) (models.ReadingPosition, error) {
+	fingerprint = strings.TrimSpace(fingerprint)
+	position = strings.TrimSpace(position)
+	if userID == 0 || fingerprint == "" || position == "" {
+		return models.ReadingPosition{}, ErrInvalidInput
 	}
-	return p, nil
+	// Ensure book row exists so FK is satisfied — progress can be recorded for
+	// OPDS-known fingerprints even before local upload by inserting a stub.
+	_, err := s.GetBook(fingerprint)
+	if errors.Is(err, ErrNotFound) {
+		_, err = s.InsertBook(models.Book{
+			Fingerprint: fingerprint,
+			Title:       fingerprint[:min(16, len(fingerprint))],
+			Format:      "unknown",
+			UploadedBy:  userID,
+		})
+		if err != nil {
+			return models.ReadingPosition{}, err
+		}
+	} else if err != nil {
+		return models.ReadingPosition{}, err
+	}
+
+	now := time.Now().UTC().Format("2006-01-02 15:04:05")
+	_, err = s.db.Exec(
+		`INSERT INTO reading_positions (user_id, book_fingerprint, position, updated_at)
+		 VALUES (?, ?, ?, ?)
+		 ON CONFLICT(user_id, book_fingerprint) DO UPDATE SET
+		   position = excluded.position,
+		   updated_at = excluded.updated_at`,
+		userID, fingerprint, position, now,
+	)
+	if err != nil {
+		return models.ReadingPosition{}, err
+	}
+	return s.GetProgress(userID, fingerprint)
+}
+
+func (s *Store) GetProgress(userID int64, fingerprint string) (models.ReadingPosition, error) {
+	var p models.ReadingPosition
+	err := s.db.QueryRow(
+		`SELECT user_id, book_fingerprint, position, COALESCE(updated_at,'')
+		 FROM reading_positions WHERE user_id = ? AND book_fingerprint = ?`,
+		userID, fingerprint,
+	).Scan(&p.UserID, &p.BookFingerprint, &p.Position, &p.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return models.ReadingPosition{}, ErrNotFound
+	}
+	return p, err
+}
+
+func (s *Store) ListProgress(userID int64) ([]models.ReadingPosition, error) {
+	rows, err := s.db.Query(
+		`SELECT user_id, book_fingerprint, position, COALESCE(updated_at,'')
+		 FROM reading_positions WHERE user_id = ? ORDER BY updated_at DESC`,
+		userID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.ReadingPosition
+	for rows.Next() {
+		var p models.ReadingPosition
+		if err := rows.Scan(&p.UserID, &p.BookFingerprint, &p.Position, &p.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	if out == nil {
+		out = []models.ReadingPosition{}
+	}
+	return out, rows.Err()
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// Ensure schema helper for tests
+func (s *Store) Ping() error {
+	if s.db == nil {
+		return fmt.Errorf("nil db")
+	}
+	return s.db.Ping()
 }

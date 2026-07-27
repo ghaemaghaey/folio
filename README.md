@@ -8,7 +8,7 @@ This repository is a **monorepo** for the whole Folio stack:
 | --- | --- | --- |
 | **Desktop** | [`desktop/`](desktop/) | Windows & Linux reader (Go + Wails) — PDF, EPUB, OPDS catalog |
 | **Android** | [`android/`](android/) | Same UI/UX in a WebView shell (Kotlin backend) |
-| **Server** | [`server/`](server/) | Lightweight HTTP API for multi-device progress sync |
+| **Server** | [`server/`](server/) | Auth + reading progress + Calibre library writer (`calibredb`) |
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/ghaemaghaey/folio/actions/workflows/ci.yml/badge.svg)](https://github.com/ghaemaghaey/folio/actions/workflows/ci.yml)
@@ -40,15 +40,28 @@ cd android
 
 See [`android/README.md`](android/README.md).
 
-### Server
+### Server (folio-server)
 
 ```bash
 cd server
+export JWT_SECRET=dev-secret
+export DB_PATH=./data/folio.db
+# optional shared Calibre library:
+# export CALIBRE_LIBRARY_PATH=/path/to/Calibre\ Library
 go run .
-# http://localhost:8787/health
+# http://127.0.0.1:8090/health
 ```
 
-See [`server/README.md`](server/README.md).
+Docker (shared library volume with calibre-web):
+
+```bash
+cd server
+export JWT_SECRET=super-secret
+export CALIBRE_LIBRARY_HOST_PATH=/host/path/to/library
+docker compose up -d --build
+```
+
+See [`server/README.md`](server/README.md) for full API (`/register`, `/login`, `/books/upload`, `/progress`, …).
 
 ---
 

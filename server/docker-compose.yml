@@ -1,0 +1,28 @@
+# Example: run folio-server next to an existing calibre-web library volume.
+#
+#   export JWT_SECRET=super-secret
+#   docker compose up -d --build
+#
+services:
+  folio-server:
+    build: .
+    image: folio-server:latest
+    ports:
+      - "8090:8090"
+    environment:
+      LISTEN_ADDR: ":8090"
+      DB_PATH: /data/folio.db
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      # Must match the path calibredb sees inside this container
+      CALIBRE_LIBRARY_PATH: /library
+      CALIBREDB_BIN: calibredb
+    volumes:
+      # Persist SQLite
+      - folio_server_data:/data
+      # Shared Calibre library (same volume/path as calibre-web)
+      # Replace with your host path or external volume name:
+      - ${CALIBRE_LIBRARY_HOST_PATH:-./library}:/library
+    restart: unless-stopped
+
+volumes:
+  folio_server_data:

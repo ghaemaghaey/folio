@@ -79,11 +79,13 @@ jobs:
         with:
           go-version: "1.22.x"
           cache-dependency-path: server/go.sum
-      - name: Build server
+      - name: Test and build server
         working-directory: server
+        env:
+          CGO_ENABLED: "0"
         run: |
-          go mod tidy
-          go build -o folio-server .
+          go test ./...
+          go build -trimpath -ldflags="-s -w" -o folio-server .
 
   # Debian Trixie: checkout on the host, compile inside debian:trixie via Docker
   # so the binary links against Trixie webkit/GTK/glibc (matches Debian 13 laptops).
