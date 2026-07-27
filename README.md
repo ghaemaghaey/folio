@@ -52,16 +52,21 @@ go run .
 # http://127.0.0.1:8090/health
 ```
 
-Docker (shared library volume with calibre-web):
+Docker image is published by CI to GHCR:
+
+```text
+ghcr.io/ghaemaghaey/folio-server:latest
+```
+
+On the Calibre host:
 
 ```bash
 cd server
-export JWT_SECRET=super-secret
-export CALIBRE_LIBRARY_HOST_PATH=/host/path/to/library
-docker compose up -d --build
+cp .env.example .env   # set JWT_SECRET + CALIBRE_LIBRARY_HOST_PATH
+docker compose pull && docker compose up -d
 ```
 
-See [`server/README.md`](server/README.md) for full API (`/register`, `/login`, `/books/upload`, `/progress`, …).
+See [`server/README.md`](server/README.md) for API docs and package visibility notes.
 
 ---
 

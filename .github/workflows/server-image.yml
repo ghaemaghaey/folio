@@ -1,0 +1,116 @@
+name: Server image (GHCR)
+
+# Build and push folio-server to GitHub Container Registry:
+#   ghcr.io/<owner>/folio-server:latest
+#   ghcr.io/<owner>/folio-server:<git-sha>
+#   ghcr.io/<owner>/folio-server:vX.Y.Z   (on version tags)
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+    paths:
+      - "server/**"
+      - ".github/workflows/server-image.yml"
+  pull_request:
+    branches: [main, master]
+    paths:
+      - "server/**"
+      - ".github/workflows/server-image.yml"
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  test:
+    name: Test server
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+          cache-dependency-path: server/go.sum
+      - name: Unit tests
+        env:
+          CGO_ENABLED: "0"
+        run: go test ./...
+
+  docker:
+    name: Build & push image
+    needs: test
+    runs-on: ubuntu-latest
+    # Build always; push only outside pull_request
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # GHCR requires lowercase image names
+      - name: Image name
+        id: image
+        run: |
+          owner="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          echo "name=${owner}/folio-server" >> "$GITHUB_OUTPUT"
+          echo "full=${{ env.REGISTRY }}/${owner}/folio-server" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata (tags + labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.image.outputs.full }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=sha-,format=short
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ./server
+          file: ./server/Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+
+      - name: Image summary
+        if: github.event_name != 'pull_request'
+        run: |
+          {
+            echo "### folio-server image"
+            echo ""
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+            echo ""
+            echo "Pull:"
+            echo ""
+            echo '```bash'
+            echo "docker pull ${{ steps.image.outputs.full }}:latest"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

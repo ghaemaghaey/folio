@@ -1,28 +1,41 @@
-# Example: run folio-server next to an existing calibre-web library volume.
+# Run folio-server on the Calibre / calibre-web host.
 #
-#   export JWT_SECRET=super-secret
-#   docker compose up -d --build
+# Prefers the GHCR image published by CI:
+#   ghcr.io/<github-user>/folio-server:latest
 #
+# Quick start on the Calibre machine:
+#
+#   1. Copy this folder (or just compose + .env) to the server
+#   2. cp .env.example .env && edit JWT_SECRET + CALIBRE_LIBRARY_HOST_PATH
+#   3. docker compose pull && docker compose up -d
+#
+# Or build locally instead of pulling:
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+
 services:
   folio-server:
-    build: .
-    image: folio-server:latest
+    image: ${FOLIO_SERVER_IMAGE:-ghcr.io/ghaemaghaey/folio-server:latest}
+    container_name: folio-server
     ports:
-      - "8090:8090"
+      - "${FOLIO_SERVER_PORT:-8090}:8090"
     environment:
       LISTEN_ADDR: ":8090"
       DB_PATH: /data/folio.db
-      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
-      # Must match the path calibredb sees inside this container
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
       CALIBRE_LIBRARY_PATH: /library
       CALIBREDB_BIN: calibredb
     volumes:
-      # Persist SQLite
+      # SQLite (survives restarts)
       - folio_server_data:/data
-      # Shared Calibre library (same volume/path as calibre-web)
-      # Replace with your host path or external volume name:
-      - ${CALIBRE_LIBRARY_HOST_PATH:-./library}:/library
+      # MUST be the same Calibre library calibre-web uses
+      - ${CALIBRE_LIBRARY_HOST_PATH:?set CALIBRE_LIBRARY_HOST_PATH in .env}:/library
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8090/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
 volumes:
   folio_server_data:

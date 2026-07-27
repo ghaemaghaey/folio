@@ -1,0 +1,8 @@
+# Optional overlay: build the image locally instead of pulling from GHCR.
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+services:
+  folio-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: folio-server:local

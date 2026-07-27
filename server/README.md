@@ -53,19 +53,46 @@ export DB_PATH=./data/folio.db
 export CALIBRE_LIBRARY_PATH=/path/to/Calibre\ Library
 ```
 
-## Docker
+## Docker / GHCR
+
+CI builds and pushes the image to **GitHub Container Registry** on every change under `server/` on `main` (and on version tags):
+
+```
+ghcr.io/ghaemaghaey/folio-server:latest
+ghcr.io/ghaemaghaey/folio-server:sha-<short>
+ghcr.io/ghaemaghaey/folio-server:vX.Y.Z   # when you push a tag
+```
+
+Workflow: [`.github/workflows/server-image.yml`](../.github/workflows/server-image.yml).
+
+### Package visibility
+
+After the first push, open the package on GitHub → **Package settings** → set visibility to **Public** (or keep private and `docker login ghcr.io` on the Calibre host).
+
+### Run on the Calibre machine
 
 ```bash
-cd server
-export JWT_SECRET=super-secret
-export CALIBRE_LIBRARY_HOST_PATH=/host/path/to/calibre/library
-docker compose up -d --build
+# on the host that already runs calibre-web
+cd /opt/folio-server   # or any dir with docker-compose.yml
+cp .env.example .env
+# edit JWT_SECRET and CALIBRE_LIBRARY_HOST_PATH (same path/volume as calibre-web)
+
+docker compose pull
+docker compose up -d
+docker compose logs -f
+curl -sS http://127.0.0.1:8090/health
 ```
 
 Volumes:
 
 - `/data` — SQLite (`folio.db`)
 - `/library` — shared Calibre library (same as calibre-web)
+
+Build locally instead of pulling:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+```
 
 The image installs Calibre via the official linux installer so `calibredb` is available. The Go binary is built with `CGO_ENABLED=0` and `modernc.org/sqlite` (no cgo).
 

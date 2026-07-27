@@ -1,4 +1,5 @@
 # syntax=docker/dockerfile:1
+# Image published by CI to: ghcr.io/<owner>/folio-server
 
 # ── Build stage (pure Go / modernc sqlite — no cgo) ─────────────────────────
 FROM golang:1.22-bookworm AS builder
@@ -11,6 +12,11 @@ RUN go build -trimpath -ldflags="-s -w" -o /out/folio-server .
 
 # ── Runtime: Debian + Calibre (for calibredb) ───────────────────────────────
 FROM debian:bookworm-slim
+
+LABEL org.opencontainers.image.title="folio-server" \
+      org.opencontainers.image.description="Folio library writer + auth/progress API" \
+      org.opencontainers.image.source="https://github.com/ghaemaghaey/folio" \
+      org.opencontainers.image.licenses="MIT"
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
@@ -40,6 +46,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Official Calibre linux installer (provides calibredb)
 RUN wget -nv -O- https://download.calibre-ebook.com/linux-installer.sh | sh /dev/stdin install_dir=/opt isolate=y \
+    && ln -sf /opt/calibre/calibredb /usr/local/bin/calibredb \
     && calibredb --version
 
 WORKDIR /app
