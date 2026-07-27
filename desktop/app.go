@@ -440,8 +440,10 @@ func (a *App) GetBookProgress(bookID string) map[string]interface{} {
 
 func (a *App) openPDF(path string, existingID string) (*DocumentInfo, error) {
 	path = filepath.Clean(path)
+	pdf.DebugLog("openPDF path=%q id=%q", path, existingID)
 	a.emitPDFEngine("opening", "Opening PDF…")
 	if err := a.ensureRenderer(); err != nil {
+		pdf.DebugLog("ensureRenderer: %v", err)
 		return nil, fmt.Errorf("PDF engine failed to start (WASM). Try again in a few seconds: %w", err)
 	}
 	lib := a.libOrNil()
@@ -456,6 +458,7 @@ func (a *App) openPDF(path string, existingID string) (*DocumentInfo, error) {
 
 	count, err := renderer.Open(path)
 	if err != nil {
+		pdf.DebugLog("Open failed: %v", err)
 		// One recovery path: rebuild engine and retry (instance can die after crash).
 		a.mu.Lock()
 		if a.renderer != nil {
@@ -464,6 +467,7 @@ func (a *App) openPDF(path string, existingID string) (*DocumentInfo, error) {
 		}
 		a.mu.Unlock()
 		if err2 := a.ensureRenderer(); err2 != nil {
+			pdf.DebugLog("retry ensureRenderer: %v", err2)
 			return nil, fmt.Errorf("open PDF: %v (retry init: %v)", err, err2)
 		}
 		a.mu.Lock()
@@ -471,9 +475,11 @@ func (a *App) openPDF(path string, existingID string) (*DocumentInfo, error) {
 		a.mu.Unlock()
 		count, err = renderer.Open(path)
 		if err != nil {
+			pdf.DebugLog("Open retry failed: %v", err)
 			return nil, fmt.Errorf("open PDF: %w", err)
 		}
 	}
+	pdf.DebugLog("Open ok pages=%d path=%q", count, path)
 
 	meta, err := library.InspectFile(path)
 	if err != nil {

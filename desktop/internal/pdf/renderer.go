@@ -325,10 +325,17 @@ func (r *Renderer) RenderPage(path string, pageIndex int, dpi int) (Page, error)
 		return Page{URL: e.url, Width: e.width, Height: e.height}, nil
 	}
 
-	// 2) Disk
+	// 2) Disk hit
 	if w, h, ok := r.diskDimsLocked(key); ok {
 		r.putCacheLocked(key, httpURL, w, h)
-		return Page{URL: httpURL, Width: w, Height: h}, nil
+		out := Page{URL: httpURL, Width: w, Height: h}
+		// Prefer loading via URL; attach dataURL only if small enough.
+		if p := r.diskPath(key); p != "" {
+			if b, err := os.ReadFile(p); err == nil && len(b) <= 900_000 {
+				out.DataURL = "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(b)
+			}
+		}
+		return out, nil
 	}
 
 	// 3) Render
@@ -360,19 +367,23 @@ func (r *Renderer) RenderPage(path string, pageIndex int, dpi int) (Page, error)
 	w, h := bounds.Dx(), bounds.Dy()
 
 	if err := r.saveDiskLocked(key, jpegBytes); err != nil {
-		// Still return base64 for tiny failures so UI can show something
-		if len(jpegBytes) < 120_000 {
-			return Page{
-				DataURL: "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(jpegBytes),
-				Width:   w,
-				Height:  h,
-			}, nil
-		}
-		return Page{}, fmt.Errorf("cache write: %w", err)
+		DebugLog("saveDisk failed key=%s: %v", key, err)
+		// Fall back to in-memory data URL so the page still displays.
+		return Page{
+			DataURL: "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(jpegBytes),
+			Width:   w,
+			Height:  h,
+		}, nil
 	}
 
 	r.putCacheLocked(key, httpURL, w, h)
-	return Page{URL: httpURL, Width: w, Height: h}, nil
+	// Always include dataURL when reasonably small so WebView works even if
+	// the asset middleware fails. Large pages use URL only.
+	out := Page{URL: httpURL, Width: w, Height: h}
+	if len(jpegBytes) <= 900_000 { // ~0.9MB raw jpeg → fine over bridge + blob
+		out.DataURL = "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(jpegBytes)
+	}
+	return out, nil
 }
 
 // RenderPageDataURL renders and returns a data URL (for small cover thumbs only).
@@ -474,6 +485,22 @@ func hashDoc(path string, data []byte) string {
 		_, _ = h.Write(data[len(data)-n:])
 	}
 	return hex.EncodeToString(h.Sum(nil))[:24]
+}
+
+// DebugLog appends a line to ~/.folio/pdf-debug.log (best-effort).
+func DebugLog(format string, args ...any) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	dir := filepath.Join(home, ".folio")
+	_ = os.MkdirAll(dir, 0o755)
+	f, err := os.OpenFile(filepath.Join(dir, "pdf-debug.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = fmt.Fprintf(f, time.Now().Format("15:04:05.000")+" "+format+"\n", args...)
 }
 
 // ResolveCacheFile maps /__folio_pdf/<hash>/file.jpg → absolute path under disk root.

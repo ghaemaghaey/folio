@@ -35,8 +35,9 @@ func main() {
 		OnStartup:        app.startup,
 		OnShutdown:       app.shutdown,
 		AssetServer: &assetserver.Options{
-			Assets:  assets,
-			Handler: http.HandlerFunc(pdfCacheHandler),
+			Assets: assets,
+			// Middleware runs first so /__folio_pdf/* is not swallowed by SPA/embed 404.
+			Middleware: pdfCacheMiddleware,
 		},
 		Bind: []interface{}{
 			app,
@@ -57,37 +58,49 @@ func main() {
 	}
 }
 
-// pdfCacheHandler serves rendered PDF page JPEGs at /__folio_pdf/...
-// so the UI never needs multi‑MB base64 strings over the Wails bridge.
-func pdfCacheHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if !strings.HasPrefix(r.URL.Path, pdf.HTTPPrefix) {
-		http.NotFound(w, r)
-		return
-	}
+func pdfCacheMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if i := strings.Index(path, pdf.HTTPPrefix); i >= 0 {
+			path = path[i:]
+		}
+		if strings.HasPrefix(path, pdf.HTTPPrefix) &&
+			(r.Method == http.MethodGet || r.Method == http.MethodHead) {
+			servePDFCache(w, r, path)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func servePDFCache(w http.ResponseWriter, r *http.Request, urlPath string) {
 	root, err := pdf.DefaultDiskRoot()
 	if err != nil {
 		http.Error(w, "cache unavailable", http.StatusInternalServerError)
 		return
 	}
-	full, ok := pdf.ResolveCacheFile(root, r.URL.Path)
+	full, ok := pdf.ResolveCacheFile(root, urlPath)
 	if !ok {
+		pdf.DebugLog("cache miss path=%q root=%q", urlPath, root)
 		http.NotFound(w, r)
 		return
 	}
-	// Extra safety: only .jpg under cache root
 	if !strings.EqualFold(filepath.Ext(full), ".jpg") {
 		http.NotFound(w, r)
 		return
 	}
-	if _, err := os.Stat(full); err != nil {
+	f, err := os.Open(full)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil || st.IsDir() {
 		http.NotFound(w, r)
 		return
 	}
 	w.Header().Set("Content-Type", "image/jpeg")
 	w.Header().Set("Cache-Control", "private, max-age=3600")
-	http.ServeFile(w, r, full)
+	http.ServeContent(w, r, st.Name(), st.ModTime(), f)
 }

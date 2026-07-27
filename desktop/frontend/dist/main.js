@@ -1337,25 +1337,31 @@ async function enterDocument(doc) {
         restoreChapter: state.epubChapterIndex,
       });
     } else {
-      // PDF — ensure page viewports are visible
+      // PDF — always land in page mode first (most reliable). User can switch to scroll.
       el.epubViewport?.classList.add("is-hidden");
+      el.scrollViewport?.classList.add("is-hidden");
+      el.pageViewport?.classList.remove("is-hidden");
+      // If user prefers scroll, load page then switch (avoids blank continuous view on engine miss).
+      await renderPage();
       if (state.mode === "scroll") {
-        el.pageViewport?.classList.add("is-hidden");
-        el.scrollViewport?.classList.remove("is-hidden");
-        // Restore ONLY by real PDF page index. Global scroll ratios jump when
-        // window size / zoom / unloaded placeholders change total scrollHeight.
-        await reloadScroll(true);
-        await scrollPdfToPage(state.doc.pageIndex, { smooth: false });
-      } else {
-        el.scrollViewport?.classList.add("is-hidden");
-        el.pageViewport?.classList.remove("is-hidden");
-        await renderPage();
+        try {
+          el.pageViewport?.classList.add("is-hidden");
+          el.scrollViewport?.classList.remove("is-hidden");
+          await reloadScroll(true);
+          await scrollPdfToPage(state.doc.pageIndex, { smooth: false });
+        } catch (scrollErr) {
+          console.error("PDF scroll mode failed, staying in page mode", scrollErr);
+          applyMode("page");
+          el.scrollViewport?.classList.add("is-hidden");
+          el.pageViewport?.classList.remove("is-hidden");
+          await renderPage();
+        }
       }
       prefetchAround(state.doc.pageIndex);
     }
   } catch (err) {
     console.error("enterDocument failed", err);
-    toast(String(err?.message || err || "Could not open document"), true);
+    toast(String(err?.message || err || "Could not open document"), true, 10000);
   } finally {
     state.restoring = false;
   }
@@ -1583,10 +1589,32 @@ function prefetchAround(index) {
   }
 }
 
-/** Resolve display src for a rendered PDF page (cache URL preferred). */
+/** Convert data: URL → blob: URL (WebView2 handles blob: far more reliably). */
+function dataURLToBlobURL(dataURL) {
+  try {
+    const m = String(dataURL).match(/^data:([^;,]+);base64,([\s\S]+)$/);
+    if (!m) return dataURL;
+    const mime = m[1];
+    const b64 = m[2];
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return URL.createObjectURL(new Blob([bytes], { type: mime }));
+  } catch (_) {
+    return dataURL;
+  }
+}
+
+/** Resolve display src for a rendered PDF page. Prefer blob from dataURL, else cache URL. */
 function pageSrc(page) {
   if (!page) return "";
-  return page.url || page.URL || page.dataURL || page.DataURL || "";
+  const data = page.dataURL || page.DataURL || "";
+  if (data && data.startsWith("data:")) {
+    if (page._blobUrl) return page._blobUrl;
+    page._blobUrl = dataURLToBlobURL(data);
+    return page._blobUrl;
+  }
+  return page.url || page.URL || data || "";
 }
 
 async function renderPage() {
@@ -1644,18 +1672,33 @@ function presentPage(page) {
       resolve();
     };
     const apply = () => {
-      if (img.src === src && img.complete && img.naturalWidth) {
+      if (img.getAttribute("data-folio-src") === src && img.complete && img.naturalWidth) {
         finish();
         return;
       }
       img.onload = () => finish();
       img.onerror = () => {
-        toast("Could not display PDF page image.", true);
+        // Fallback: try the other representation
+        const alt =
+          (page.dataURL || page.DataURL) && src !== (page.dataURL || page.DataURL)
+            ? dataURLToBlobURL(page.dataURL || page.DataURL)
+            : page.url || page.URL || "";
+        if (alt && alt !== src) {
+          img.onerror = () => {
+            toast("Could not display PDF page image.", true, 8000);
+            resolve();
+          };
+          img.setAttribute("data-folio-src", alt);
+          img.src = alt;
+          return;
+        }
+        toast("Could not display PDF page image.", true, 8000);
         resolve();
       };
+      img.setAttribute("data-folio-src", src);
       img.src = src;
     };
-    if (img.src && img.src !== src && (img.src.startsWith("data:") || img.src.includes("__folio_pdf"))) {
+    if (img.src && img.getAttribute("data-folio-src") !== src) {
       frame.classList.add("is-turning-out");
       setTimeout(apply, 80);
     } else apply();
@@ -1738,6 +1781,10 @@ async function ensureScrollPage(index) {
     applyPdfVisualZoom();
   } catch (err) {
     state.scrollLoaded.delete(index);
+    console.error("ensureScrollPage", index, err);
+    if (index === (state.doc?.pageIndex | 0)) {
+      toast("PDF page load failed: " + String(err?.message || err), true, 8000);
+    }
   }
 }
 
