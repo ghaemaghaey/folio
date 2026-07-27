@@ -22,6 +22,10 @@ import (
 	"github.com/tetratelabs/wazero"
 )
 
+// HTTPPrefix is served by the Wails asset handler (see main.go).
+// Using paths instead of multi‑MB base64 over the JS bridge is required for WebView2.
+const HTTPPrefix = "/__folio_pdf/"
+
 // Renderer wraps go-pdfium with WebAssembly + session + memory/disk page cache.
 type Renderer struct {
 	pool     pdfium.Pool
@@ -33,22 +37,30 @@ type Renderer struct {
 	docRef    references.FPDF_DOCUMENT
 	pageCount int
 	hasDoc    bool
-	docHash   string // fingerprint for disk cache folder
+	docHash   string
 
-	// in-memory LRU
 	cache    map[string]*list.Element
 	cacheLRU *list.List
 	cacheCap int
 
-	// disk cache root: ~/.folio/cache/pdf/<docHash>/
 	diskRoot string
 }
 
+// Page is a rendered page ready for the UI.
+type Page struct {
+	// URL is a same-origin path like /__folio_pdf/<hash>/page-0@128.jpg
+	URL string
+	// DataURL is only filled for tiny images (e.g. covers) when requested.
+	DataURL string
+	Width   int
+	Height  int
+}
+
 type cacheEntry struct {
-	key     string
-	dataURL string
-	width   int
-	height  int
+	key    string
+	url    string
+	width  int
+	height int
 }
 
 // NewRenderer initializes a PDFium worker pool using WebAssembly.
@@ -65,14 +77,13 @@ func NewRenderer() (*Renderer, error) {
 		return nil, fmt.Errorf("pdfium webassembly init: %w", err)
 	}
 
-	// First compile of pdfium.wasm can take several seconds on Windows.
 	instance, err := pool.GetInstance(90 * time.Second)
 	if err != nil {
 		_ = pool.Close()
 		return nil, fmt.Errorf("pdfium get instance: %w", err)
 	}
 
-	diskRoot, _ := defaultDiskRoot()
+	diskRoot, _ := DefaultDiskRoot()
 
 	return &Renderer{
 		pool:     pool,
@@ -84,15 +95,24 @@ func NewRenderer() (*Renderer, error) {
 	}, nil
 }
 
-// windowsFriendlyFS mounts every existing drive letter so FilePath access works
-// no matter which volume the book lives on (C:, D:, …). In-memory File: opens
-// do not need this, but some PDFium ops still touch the VFS.
+// DefaultDiskRoot is ~/.folio/cache/pdf
+func DefaultDiskRoot() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(home, ".folio", "cache", "pdf")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
 func windowsFriendlyFS() wazero.FSConfig {
 	fs := wazero.NewFSConfig()
 	if runtime.GOOS != "windows" {
 		return fs.WithDirMount("/", "/")
 	}
-	// Mount each drive under /c, /d, … and also map C:\ → / as default root.
 	for c := 'A'; c <= 'Z'; c++ {
 		root := string(c) + `:\`
 		if _, err := os.Stat(root); err != nil {
@@ -104,7 +124,6 @@ func windowsFriendlyFS() wazero.FSConfig {
 			fs = fs.WithDirMount(root, "/")
 		}
 	}
-	// Fallback: at least mount the volume of the working directory.
 	if cwd, err := os.Getwd(); err == nil {
 		vol := filepath.VolumeName(cwd)
 		if vol != "" {
@@ -112,18 +131,6 @@ func windowsFriendlyFS() wazero.FSConfig {
 		}
 	}
 	return fs
-}
-
-func defaultDiskRoot() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	dir := filepath.Join(home, ".folio", "cache", "pdf")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
-	}
-	return dir, nil
 }
 
 // Close releases PDFium resources.
@@ -171,7 +178,6 @@ func (r *Renderer) openLocked(path string) (int, error) {
 	if len(pdfBytes) < 5 {
 		return 0, fmt.Errorf("file is empty or too small")
 	}
-	// Keep an independent backing array for the WASM lifetime of the document.
 	kept := make([]byte, len(pdfBytes))
 	copy(kept, pdfBytes)
 
@@ -179,7 +185,6 @@ func (r *Renderer) openLocked(path string) (int, error) {
 		File: &kept,
 	})
 	if err != nil {
-		// Fallback: FilePath in POSIX form (may help some PDFs / code paths).
 		posix := toPOSIXPath(path)
 		doc, err = r.instance.OpenDocument(&requests.OpenDocument{
 			FilePath: &posix,
@@ -187,7 +192,6 @@ func (r *Renderer) openLocked(path string) (int, error) {
 		if err != nil {
 			return 0, fmt.Errorf("open document: %w", err)
 		}
-		// When opening by path we still keep bytes nil; document is held by path.
 		kept = nil
 	}
 
@@ -217,8 +221,6 @@ func (r *Renderer) openLocked(path string) (int, error) {
 	return r.pageCount, nil
 }
 
-// toPOSIXPath converts a Windows path for go-pdfium WASM VFS.
-// C:\foo\bar.pdf → /c/foo/bar.pdf when drives are mounted as /c, /d, …
 func toPOSIXPath(path string) string {
 	path = filepath.Clean(path)
 	if runtime.GOOS != "windows" {
@@ -275,14 +277,21 @@ func (r *Renderer) PageCount(path string) (int, error) {
 	return r.Open(path)
 }
 
-// RenderPage renders pageIndex (0-based) at DPI.
-// Order: memory LRU → disk JPEG cache → PDFium render (then write disk).
-func (r *Renderer) RenderPage(path string, pageIndex int, dpi int) (dataURL string, width, height int, err error) {
+// DiskRoot returns the PDF page cache directory.
+func (r *Renderer) DiskRoot() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.diskRoot
+}
+
+// RenderPage renders pageIndex (0-based) at DPI and returns a cache URL
+// (not a giant base64 string — WebView2/Wails choke on multi‑MB JS strings).
+func (r *Renderer) RenderPage(path string, pageIndex int, dpi int) (Page, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	if r.instance == nil {
-		return "", 0, 0, fmt.Errorf("renderer closed")
+		return Page{}, fmt.Errorf("renderer closed")
 	}
 	if dpi <= 0 {
 		dpi = 120
@@ -294,7 +303,7 @@ func (r *Renderer) RenderPage(path string, pageIndex int, dpi int) (dataURL stri
 	path = filepath.Clean(path)
 	if !r.hasDoc || r.openPath != path {
 		if _, err := r.openLocked(path); err != nil {
-			return "", 0, 0, err
+			return Page{}, err
 		}
 	}
 
@@ -306,18 +315,20 @@ func (r *Renderer) RenderPage(path string, pageIndex int, dpi int) (dataURL stri
 	}
 
 	key := fmt.Sprintf("%d@%d", pageIndex, dpi)
+	fileName := diskFileName(key)
+	httpURL := HTTPPrefix + r.docHash + "/" + fileName
 
 	// 1) Memory
 	if el := r.cache[key]; el != nil {
 		r.cacheLRU.MoveToFront(el)
 		e := el.Value.(*cacheEntry)
-		return e.dataURL, e.width, e.height, nil
+		return Page{URL: e.url, Width: e.width, Height: e.height}, nil
 	}
 
 	// 2) Disk
-	if dataURL, w, h, ok := r.loadDiskLocked(key); ok {
-		r.putCacheLocked(key, dataURL, w, h)
-		return dataURL, w, h, nil
+	if w, h, ok := r.diskDimsLocked(key); ok {
+		r.putCacheLocked(key, httpURL, w, h)
+		return Page{URL: httpURL, Width: w, Height: h}, nil
 	}
 
 	// 3) Render
@@ -331,94 +342,114 @@ func (r *Renderer) RenderPage(path string, pageIndex int, dpi int) (dataURL stri
 		},
 	})
 	if err != nil {
-		return "", 0, 0, fmt.Errorf("render page: %w", err)
+		return Page{}, fmt.Errorf("render page: %w", err)
 	}
 	defer pageRender.Cleanup()
 
 	img := pageRender.Result.Image
 	if img == nil {
-		return "", 0, 0, fmt.Errorf("render returned empty image")
+		return Page{}, fmt.Errorf("render returned empty image")
 	}
 
 	var buf bytes.Buffer
-	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 82}); err != nil {
-		return "", 0, 0, fmt.Errorf("encode jpeg: %w", err)
+	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 80}); err != nil {
+		return Page{}, fmt.Errorf("encode jpeg: %w", err)
 	}
 	jpegBytes := buf.Bytes()
 	bounds := img.Bounds()
 	w, h := bounds.Dx(), bounds.Dy()
 
-	// Persist to disk (best-effort)
-	r.saveDiskLocked(key, jpegBytes)
+	if err := r.saveDiskLocked(key, jpegBytes); err != nil {
+		// Still return base64 for tiny failures so UI can show something
+		if len(jpegBytes) < 120_000 {
+			return Page{
+				DataURL: "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(jpegBytes),
+				Width:   w,
+				Height:  h,
+			}, nil
+		}
+		return Page{}, fmt.Errorf("cache write: %w", err)
+	}
 
-	b64 := base64.StdEncoding.EncodeToString(jpegBytes)
-	dataURL = "data:image/jpeg;base64," + b64
-	r.putCacheLocked(key, dataURL, w, h)
-	return dataURL, w, h, nil
+	r.putCacheLocked(key, httpURL, w, h)
+	return Page{URL: httpURL, Width: w, Height: h}, nil
 }
 
-func (r *Renderer) diskDir() string {
-	if r.diskRoot == "" || r.docHash == "" {
-		return ""
+// RenderPageDataURL renders and returns a data URL (for small cover thumbs only).
+func (r *Renderer) RenderPageDataURL(path string, pageIndex int, dpi int) (string, int, int, error) {
+	pg, err := r.RenderPage(path, pageIndex, dpi)
+	if err != nil {
+		return "", 0, 0, err
 	}
-	return filepath.Join(r.diskRoot, r.docHash)
+	if pg.DataURL != "" {
+		return pg.DataURL, pg.Width, pg.Height, nil
+	}
+	// Read from disk cache and base64 (covers are low DPI / small)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := fmt.Sprintf("%d@%d", pageIndex, dpi)
+	b, err := os.ReadFile(r.diskPath(key))
+	if err != nil {
+		return "", pg.Width, pg.Height, err
+	}
+	return "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(b), pg.Width, pg.Height, nil
 }
 
-func (r *Renderer) diskPath(key string) string {
-	dir := r.diskDir()
-	if dir == "" {
-		return ""
-	}
-	// key is "12@144" → page-12-dpi144.jpg
+func diskFileName(key string) string {
 	safe := ""
 	for _, c := range key {
 		if (c >= '0' && c <= '9') || c == '@' {
 			safe += string(c)
 		}
 	}
-	return filepath.Join(dir, "page-"+safe+".jpg")
+	return "page-" + safe + ".jpg"
 }
 
-func (r *Renderer) loadDiskLocked(key string) (dataURL string, w, h int, ok bool) {
+func (r *Renderer) diskPath(key string) string {
+	if r.diskRoot == "" || r.docHash == "" {
+		return ""
+	}
+	return filepath.Join(r.diskRoot, r.docHash, diskFileName(key))
+}
+
+func (r *Renderer) diskDimsLocked(key string) (w, h int, ok bool) {
 	p := r.diskPath(key)
 	if p == "" {
-		return "", 0, 0, false
+		return 0, 0, false
 	}
 	b, err := os.ReadFile(p)
 	if err != nil || len(b) < 32 {
-		return "", 0, 0, false
+		return 0, 0, false
 	}
 	cfg, err := jpeg.DecodeConfig(bytes.NewReader(b))
 	if err != nil {
-		return "", 0, 0, false
+		return 0, 0, false
 	}
-	dataURL = "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(b)
-	return dataURL, cfg.Width, cfg.Height, true
+	return cfg.Width, cfg.Height, true
 }
 
-func (r *Renderer) saveDiskLocked(key string, jpegBytes []byte) {
+func (r *Renderer) saveDiskLocked(key string, jpegBytes []byte) error {
 	p := r.diskPath(key)
 	if p == "" {
-		return
+		return fmt.Errorf("no disk path")
 	}
-	dir := filepath.Dir(p)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return err
 	}
 	tmp := p + ".tmp"
 	if err := os.WriteFile(tmp, jpegBytes, 0o644); err != nil {
-		return
+		return err
 	}
-	_ = os.Rename(tmp, p)
+	return os.Rename(tmp, p)
 }
 
-func (r *Renderer) putCacheLocked(key, dataURL string, w, h int) {
+func (r *Renderer) putCacheLocked(key, url string, w, h int) {
 	if el, ok := r.cache[key]; ok {
 		r.cacheLRU.MoveToFront(el)
-		el.Value = &cacheEntry{key: key, dataURL: dataURL, width: w, height: h}
+		el.Value = &cacheEntry{key: key, url: url, width: w, height: h}
 		return
 	}
-	el := r.cacheLRU.PushFront(&cacheEntry{key: key, dataURL: dataURL, width: w, height: h})
+	el := r.cacheLRU.PushFront(&cacheEntry{key: key, url: url, width: w, height: h})
 	r.cache[key] = el
 	for r.cacheLRU.Len() > r.cacheCap {
 		back := r.cacheLRU.Back()
@@ -433,7 +464,6 @@ func (r *Renderer) putCacheLocked(key, dataURL string, w, h int) {
 
 func hashDoc(path string, data []byte) string {
 	h := sha256.New()
-	// path + size + first/last 32KiB — stable enough and fast
 	_, _ = h.Write([]byte(filepath.Clean(path)))
 	_, _ = fmt.Fprintf(h, ":%d:", len(data))
 	n := 32 * 1024
@@ -444,4 +474,39 @@ func hashDoc(path string, data []byte) string {
 		_, _ = h.Write(data[len(data)-n:])
 	}
 	return hex.EncodeToString(h.Sum(nil))[:24]
+}
+
+// ResolveCacheFile maps /__folio_pdf/<hash>/file.jpg → absolute path under disk root.
+// Returns false if the path is unsafe or missing.
+func ResolveCacheFile(diskRoot, urlPath string) (string, bool) {
+	if diskRoot == "" {
+		return "", false
+	}
+	if !strings.HasPrefix(urlPath, HTTPPrefix) {
+		return "", false
+	}
+	rel := strings.TrimPrefix(urlPath, HTTPPrefix)
+	rel = filepath.Clean(rel)
+	if rel == "." || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+		return "", false
+	}
+	// Only allow hash/filename shape
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	if len(parts) != 2 {
+		return "", false
+	}
+	full := filepath.Join(diskRoot, parts[0], parts[1])
+	absRoot, err1 := filepath.Abs(diskRoot)
+	absFull, err2 := filepath.Abs(full)
+	if err1 != nil || err2 != nil {
+		return "", false
+	}
+	if !strings.HasPrefix(strings.ToLower(absFull), strings.ToLower(absRoot)+string(os.PathSeparator)) &&
+		!strings.EqualFold(absFull, absRoot) {
+		return "", false
+	}
+	if st, err := os.Stat(absFull); err != nil || st.IsDir() {
+		return "", false
+	}
+	return absFull, true
 }

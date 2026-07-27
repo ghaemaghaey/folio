@@ -1546,7 +1546,9 @@ async function fetchPDFPage(index, { setCurrent = true } = {}) {
   }
   if (!page) return null;
   const packed = {
-    dataURL: page.dataURL ?? page.DataURL,
+    // Prefer cache URL (small JSON); dataURL only for tiny fallbacks
+    url: page.url || page.URL || "",
+    dataURL: (page.dataURL ?? page.DataURL) || "",
     pageIndex: page.pageIndex ?? page.PageIndex ?? index,
     pageCount: page.pageCount ?? page.PageCount ?? state.doc?.pageCount ?? 1,
     width: page.width ?? page.Width,
@@ -1581,6 +1583,12 @@ function prefetchAround(index) {
   }
 }
 
+/** Resolve display src for a rendered PDF page (cache URL preferred). */
+function pageSrc(page) {
+  if (!page) return "";
+  return page.url || page.URL || page.dataURL || page.DataURL || "";
+}
+
 async function renderPage() {
   if (!hasWails() || !state.doc) return;
   if (state.doc.format !== "pdf") return;
@@ -1596,7 +1604,8 @@ async function renderPage() {
   if (showSpinner && el.pageLoading) el.pageLoading.hidden = false;
   try {
     const page = await fetchPDFPage(target, { setCurrent: true });
-    if (!page || !page.dataURL) {
+    const src = pageSrc(page);
+    if (!page || !src) {
       toast("PDF page was empty — try reopening the file.", true);
       return;
     }
@@ -1610,7 +1619,7 @@ async function renderPage() {
     prefetchAround(target);
   } catch (err) {
     console.error("renderPage", err);
-    toast(String(err?.message || err || "PDF render failed"), true);
+    toast(String(err?.message || err || "PDF render failed"), true, 8000);
   } finally {
     if (el.pageLoading) el.pageLoading.hidden = true;
     state.rendering = false;
@@ -1621,6 +1630,11 @@ function presentPage(page) {
   return new Promise((resolve) => {
     const img = el.pageImage;
     const frame = el.pageFrame;
+    const src = pageSrc(page);
+    if (!src) {
+      resolve();
+      return;
+    }
     const finish = () => {
       frame.classList.remove("is-turning-out");
       frame.classList.add("is-turning-in");
@@ -1630,15 +1644,18 @@ function presentPage(page) {
       resolve();
     };
     const apply = () => {
-      if (img.src === page.dataURL && img.complete && img.naturalWidth) {
+      if (img.src === src && img.complete && img.naturalWidth) {
         finish();
         return;
       }
       img.onload = () => finish();
-      img.onerror = () => resolve();
-      img.src = page.dataURL;
+      img.onerror = () => {
+        toast("Could not display PDF page image.", true);
+        resolve();
+      };
+      img.src = src;
     };
-    if (img.src && img.src.startsWith("data:") && img.src !== page.dataURL) {
+    if (img.src && img.src !== src && (img.src.startsWith("data:") || img.src.includes("__folio_pdf"))) {
       frame.classList.add("is-turning-out");
       setTimeout(apply, 80);
     } else apply();
@@ -1716,7 +1733,7 @@ async function ensureScrollPage(index) {
     img.alt = `Page ${index + 1}`;
     img.draggable = false;
     img.onload = () => applyPdfVisualZoom();
-    img.src = page.dataURL;
+    img.src = pageSrc(page);
     slot.appendChild(img);
     applyPdfVisualZoom();
   } catch (err) {

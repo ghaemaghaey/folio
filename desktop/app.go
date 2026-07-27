@@ -62,8 +62,10 @@ type DocumentInfo struct {
 }
 
 // PageImage is a rendered PDF page.
+// Prefer URL (served via /__folio_pdf/…) over DataURL — large base64 breaks WebView2/Wails.
 type PageImage struct {
-	DataURL   string `json:"dataURL"`
+	URL       string `json:"url,omitempty"`
+	DataURL   string `json:"dataURL,omitempty"`
 	PageIndex int    `json:"pageIndex"`
 	PageCount int    `json:"pageCount"`
 	Width     int    `json:"width"`
@@ -250,7 +252,7 @@ func (a *App) PrefetchPDFPages(pages []int, dpi int) {
 			continue
 		}
 		// Intentionally does NOT touch openDoc.PageIndex
-		_, _, _, _ = renderer.RenderPage(path, p, dpi)
+		_, _ = renderer.RenderPage(path, p, dpi)
 	}
 }
 
@@ -554,7 +556,7 @@ func (a *App) openPDF(path string, existingID string) (*DocumentInfo, error) {
 
 	if needCover && bookID != "" {
 		go func(p, id string) {
-			cover, _, _, err := renderer.RenderPage(p, 0, 48)
+			cover, _, _, err := renderer.RenderPageDataURL(p, 0, 48)
 			if err != nil || cover == "" || lib == nil {
 				return
 			}
@@ -736,17 +738,18 @@ func (a *App) renderPDFPage(pageIndex int, dpi int, setCurrent bool) (*PageImage
 	renderer := a.renderer
 	a.mu.Unlock()
 
-	// Render outside app lock so prefetch/UI don't stall each other as hard
-	img, w, h, err := renderer.RenderPage(path, pageIndex, dpi)
+	// Render outside app lock — returns a cache URL, not multi‑MB base64.
+	pg, err := renderer.RenderPage(path, pageIndex, dpi)
 	if err != nil {
 		return nil, err
 	}
 	return &PageImage{
-		DataURL:   img,
+		URL:       pg.URL,
+		DataURL:   pg.DataURL,
 		PageIndex: pageIndex,
 		PageCount: count,
-		Width:     w,
-		Height:    h,
+		Width:     pg.Width,
+		Height:    pg.Height,
 	}, nil
 }
 
