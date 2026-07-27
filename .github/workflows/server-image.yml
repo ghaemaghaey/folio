@@ -2,7 +2,7 @@ name: Server image (GHCR)
 
 # Build and push folio-server to GitHub Container Registry:
 #   ghcr.io/<owner>/folio-server:latest
-#   ghcr.io/<owner>/folio-server:<git-sha>
+#   ghcr.io/<owner>/folio-server:sha-<short>
 #   ghcr.io/<owner>/folio-server:vX.Y.Z   (on version tags)
 
 on:
@@ -30,7 +30,7 @@ jobs:
       run:
         working-directory: server
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: actions/setup-go@v5
         with:
           go-version: "1.22.x"
@@ -44,16 +44,14 @@ jobs:
     name: Build & push image
     needs: test
     runs-on: ubuntu-latest
-    # Build always; push only outside pull_request
     permissions:
       contents: read
       packages: write
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      # GHCR requires lowercase image names
       - name: Image name
         id: image
         run: |
@@ -94,6 +92,10 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Single platform for GHCR runners (amd64). Calibre tarball is arch-specific.
+          platforms: linux/amd64
+          build-args: |
+            CALIBRE_VERSION=7.26.0
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false
