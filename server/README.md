@@ -53,15 +53,22 @@ export DB_PATH=./data/folio.db
 export CALIBRE_LIBRARY_PATH=/path/to/Calibre\ Library
 ```
 
-## Docker / GHCR
+## Docker / GHCR (image size)
 
-CI builds and pushes the image to **GitHub Container Registry** on every change under `server/` on `main` (and on version tags):
+| Tag | Approx. size | Contents |
+| --- | --- | --- |
+| **`latest` / `slim`** | **~15–30 MB** | Go API only + **pure-Go** Calibre `metadata.db` writer |
+| `with-calibre` | ~350–500 MB | Full official Calibre (`calibredb`) — optional |
+
+Almost all of a “400 MB” image is **Calibre/Qt**, not Go. The slim image is the default.
 
 ```
 ghcr.io/ghaemaghaey/folio-server:latest
-ghcr.io/ghaemaghaey/folio-server:sha-<short>
-ghcr.io/ghaemaghaey/folio-server:vX.Y.Z   # when you push a tag
+ghcr.io/ghaemaghaey/folio-server:slim
+ghcr.io/ghaemaghaey/folio-server:with-calibre   # manual/tag builds only
 ```
+
+Env `LIBRARY_WRITER=native|calibredb|auto` (default in slim image: `native`).
 
 Workflow: [`.github/workflows/server-image.yml`](../.github/workflows/server-image.yml).
 

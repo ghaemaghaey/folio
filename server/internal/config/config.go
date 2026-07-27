@@ -13,6 +13,10 @@ type Config struct {
 	CalibreLibraryPath string
 	// CalibredbBin is optional override for the calibredb executable path.
 	CalibredbBin string
+	// LibraryWriter: auto | native | calibredb
+	// native = pure-Go metadata.db (slim image, ~20MB)
+	// calibredb = full Calibre binary (fat image, ~400MB)
+	LibraryWriter string
 }
 
 // Load reads configuration from the environment with documented defaults.
@@ -23,6 +27,7 @@ func Load() Config {
 		JWTSecret:          envOr("JWT_SECRET", "change-me-in-production"),
 		CalibreLibraryPath: strings.TrimSpace(os.Getenv("CALIBRE_LIBRARY_PATH")),
 		CalibredbBin:       envOr("CALIBREDB_BIN", "calibredb"),
+		LibraryWriter:      envOr("LIBRARY_WRITER", "auto"),
 	}
 }
 

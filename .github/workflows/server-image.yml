@@ -1,9 +1,7 @@
 name: Server image (GHCR)
 
-# Build and push folio-server to GitHub Container Registry:
-#   ghcr.io/<owner>/folio-server:latest
-#   ghcr.io/<owner>/folio-server:sha-<short>
-#   ghcr.io/<owner>/folio-server:vX.Y.Z   (on version tags)
+# Slim default (~20 MB):  ghcr.io/<owner>/folio-server:latest
+# Optional fat Calibre:  ghcr.io/<owner>/folio-server:with-calibre
 
 on:
   push:
@@ -40,8 +38,8 @@ jobs:
           CGO_ENABLED: "0"
         run: go test ./...
 
-  docker:
-    name: Build & push image
+  docker-slim:
+    name: Build & push slim image
     needs: test
     runs-on: ubuntu-latest
     permissions:
@@ -49,20 +47,17 @@ jobs:
       packages: write
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
 
       - name: Image name
         id: image
         run: |
           owner="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
-          echo "name=${owner}/folio-server" >> "$GITHUB_OUTPUT"
           echo "full=${{ env.REGISTRY }}/${owner}/folio-server" >> "$GITHUB_OUTPUT"
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GitHub Container Registry
+      - name: Log in to GHCR
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
@@ -70,21 +65,19 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Docker metadata (tags + labels)
+      - name: Metadata (slim / latest)
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ steps.image.outputs.full }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=slim,enable={{is_default_branch}}
             type=sha,prefix=sha-,format=short
-            type=ref,event=branch
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
 
-      - name: Build and push
-        id: build
+      - name: Build and push slim
         uses: docker/build-push-action@v6
         with:
           context: ./server
@@ -92,27 +85,64 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # Single platform for GHCR runners (amd64). Calibre tarball is arch-specific.
           platforms: linux/amd64
-          build-args: |
-            CALIBRE_VERSION=7.26.0
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=slim
+          cache-to: type=gha,mode=max,scope=slim
           provenance: false
 
-      - name: Image summary
+      - name: Summary
         if: github.event_name != 'pull_request'
         run: |
           {
-            echo "### folio-server image"
+            echo "### folio-server (slim)"
+            echo "Typical size: **~15–30 MB** (Go API + pure-Go Calibre writer, no Qt)"
             echo ""
             echo '```'
             echo "${{ steps.meta.outputs.tags }}"
             echo '```'
-            echo ""
-            echo "Pull:"
-            echo ""
-            echo '```bash'
-            echo "docker pull ${{ steps.image.outputs.full }}:latest"
-            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # Fat image is optional — only built on tags or manual dispatch (saves CI time).
+  docker-calibre:
+    name: Build & push with-calibre image
+    needs: test
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Image name
+        id: image
+        run: |
+          owner="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          echo "full=${{ env.REGISTRY }}/${owner}/folio-server" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push with-calibre
+        uses: docker/build-push-action@v6
+        with:
+          context: ./server
+          file: ./server/Dockerfile.calibre
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: |
+            ${{ steps.image.outputs.full }}:with-calibre
+            ${{ steps.image.outputs.full }}:with-calibre-${{ github.sha }}
+          platforms: linux/amd64
+          build-args: |
+            CALIBRE_VERSION=7.26.0
+          cache-from: type=gha,scope=calibre
+          cache-to: type=gha,mode=max,scope=calibre
+          provenance: false

@@ -37,6 +37,7 @@ func New(cfg config.Config, st *store.Store) *Server {
 		calibre: &calibre.Client{
 			Bin:         cfg.CalibredbBin,
 			LibraryPath: cfg.CalibreLibraryPath,
+			Writer:      cfg.LibraryWriter,
 		},
 	}
 }
@@ -207,15 +208,18 @@ func (s *Server) handleBookUpload(w http.ResponseWriter, r *http.Request) {
 
 	var calibreID *int64
 	if strings.TrimSpace(s.cfg.CalibreLibraryPath) != "" {
+		s.calibre.Title = title
+		s.calibre.Author = author
+		s.calibre.Format = format
 		id, err := s.calibre.Add(tmpPath)
 		if err != nil {
-			log.Printf("calibredb add error: %v", err)
-			writeError(w, http.StatusBadGateway, "calibredb add failed: "+err.Error())
+			log.Printf("library add error: %v", err)
+			writeError(w, http.StatusBadGateway, "library add failed: "+err.Error())
 			return
 		}
 		calibreID = &id
 	} else {
-		log.Printf("CALIBRE_LIBRARY_PATH unset — storing book metadata without calibredb")
+		log.Printf("CALIBRE_LIBRARY_PATH unset — storing folio DB metadata only")
 	}
 
 	book, err := s.store.InsertBook(models.Book{

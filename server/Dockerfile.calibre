@@ -1,0 +1,63 @@
+# syntax=docker/dockerfile:1
+# OPTIONAL fat image (~350–500 MB): bundles official Calibre for calibredb.
+# Prefer the slim Dockerfile + native library writer for normal deploys.
+#
+# Build: docker build -f Dockerfile.calibre -t folio-server:with-calibre .
+
+FROM golang:1.22-bookworm AS builder
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+ENV CGO_ENABLED=0
+RUN go build -trimpath -ldflags="-s -w" -o /out/folio-server .
+
+FROM debian:bookworm-slim
+
+ARG CALIBRE_VERSION=7.26.0
+ARG TARGETARCH
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    LANG=C.UTF-8 \
+    CALIBRE_LIBRARY_PATH=/library \
+    DB_PATH=/data/folio.db \
+    LISTEN_ADDR=:8090 \
+    PATH="/opt/calibre:${PATH}" \
+    QT_QPA_PLATFORM=offscreen \
+    QTWEBENGINE_DISABLE_SANDBOX=1 \
+    LIBRARY_WRITER=calibredb
+
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        ca-certificates curl xz-utils \
+        libegl1 libopengl0 libgl1 libglib2.0-0 libfontconfig1 libfreetype6 \
+        libdbus-1-3 libxcb1 libxcb-cursor0 libxcb-icccm4 libxcb-image0 \
+        libxcb-keysyms1 libxcb-render0 libxcb-render-util0 libxcb-shape0 \
+        libxcb-shm0 libxcb-xfixes0 libxcb-xinerama0 libxkbcommon0 \
+        libxkbcommon-x11-0 libnss3 libnspr4 libx11-6 libx11-xcb1 \
+        libxcomposite1 libxdamage1 libxext6 libxfixes3 libxi6 libxrandr2 \
+        libxrender1 libxtst6 libasound2 libxkbfile1 python3; \
+    rm -rf /var/lib/apt/lists/*; \
+    case "${TARGETARCH}" in \
+      amd64|"") CALIBRE_ARCH=x86_64 ;; \
+      arm64) CALIBRE_ARCH=arm64 ;; \
+      *) echo "unsupported TARGETARCH=${TARGETARCH}"; exit 1 ;; \
+    esac; \
+    mkdir -p /opt/calibre; \
+    curl -fL --retry 5 -o /tmp/calibre.txz \
+      "https://download.calibre-ebook.com/${CALIBRE_VERSION}/calibre-${CALIBRE_VERSION}-${CALIBRE_ARCH}.txz"; \
+    tar -xJf /tmp/calibre.txz -C /opt/calibre; \
+    rm -f /tmp/calibre.txz; \
+    if [ -x /opt/calibre/calibre_postinstall ]; then \
+      /opt/calibre/calibre_postinstall --skip-desktop-integration || true; \
+    fi; \
+    ln -sfn /opt/calibre/calibredb /usr/local/bin/calibredb; \
+    calibredb --version
+
+WORKDIR /app
+COPY --from=builder /out/folio-server /app/folio-server
+RUN mkdir -p /data /library /tmp/folio-uploads && chmod +x /app/folio-server
+EXPOSE 8090
+VOLUME ["/data", "/library"]
+ENTRYPOINT ["/app/folio-server"]

@@ -11,21 +11,29 @@ import (
 	"strings"
 )
 
-// Client shells out to calibredb against a shared library path.
+// Writer modes for Client.Writer.
+const (
+	WriterAuto      = "auto"      // native if no calibredb, else calibredb
+	WriterNative    = "native"    // pure-Go metadata.db (slim containers)
+	WriterCalibredb = "calibredb" // shell out to full Calibre
+)
+
+// Client adds books to a Calibre library (native Go and/or calibredb).
 type Client struct {
 	Bin         string // default: calibredb
 	LibraryPath string
+	// Writer: auto | native | calibredb (from LIBRARY_WRITER env).
+	Writer string
+	// Optional metadata for native writer (set by API before Add).
+	Title  string
+	Author string
+	Format string
 }
 
 // Add imports a file into the Calibre library and returns the new book id.
-// Output is typically: "Added book ids: 42"
 func (c *Client) Add(filePath string) (int64, error) {
 	if strings.TrimSpace(c.LibraryPath) == "" {
 		return 0, fmt.Errorf("CALIBRE_LIBRARY_PATH is not set")
-	}
-	bin := c.Bin
-	if bin == "" {
-		bin = "calibredb"
 	}
 	abs, err := filepath.Abs(filePath)
 	if err != nil {
@@ -37,6 +45,39 @@ func (c *Client) Add(filePath string) (int64, error) {
 	if _, err := os.Stat(c.LibraryPath); err != nil {
 		return 0, fmt.Errorf("library path: %w", err)
 	}
+
+	mode := strings.ToLower(strings.TrimSpace(c.Writer))
+	if mode == "" {
+		mode = WriterAuto
+	}
+	switch mode {
+	case WriterNative:
+		return NativeAdd(c.LibraryPath, abs, c.Title, c.Author, c.Format)
+	case WriterCalibredb:
+		return c.addCalibredb(abs)
+	default: // auto
+		if _, err := exec.LookPath(c.calibredbBin()); err != nil {
+			return NativeAdd(c.LibraryPath, abs, c.Title, c.Author, c.Format)
+		}
+		id, err := c.addCalibredb(abs)
+		if err != nil {
+			// Fall back to native if calibredb is broken in the container
+			return NativeAdd(c.LibraryPath, abs, c.Title, c.Author, c.Format)
+		}
+		return id, nil
+	}
+}
+
+func (c *Client) calibredbBin() string {
+	if c.Bin != "" {
+		return c.Bin
+	}
+	return "calibredb"
+}
+
+// addCalibredb shells out to calibredb. Output is typically: "Added book ids: 42"
+func (c *Client) addCalibredb(abs string) (int64, error) {
+	bin := c.calibredbBin()
 
 	cmd := exec.Command(bin, "add", abs, "--with-library", c.LibraryPath)
 	var stdout, stderr bytes.Buffer
