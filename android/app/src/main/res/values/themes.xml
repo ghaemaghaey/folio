@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Folio" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="android:statusBarColor">#f0e6d2</item>
+        <item name="android:navigationBarColor">#f0e6d2</item>
+        <item name="android:windowBackground">#f0e6d2</item>
+        <item name="colorPrimary">#9a6432</item>
+        <item name="colorPrimaryVariant">#7d5026</item>
+        <item name="colorOnPrimary">#ffffff</item>
+    </style>
+</resources>

@@ -1,27 +1,33 @@
-# Binaries
-build/bin/
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
-
-# Go
-vendor/
-*.test
-*.out
-go.work
-go.work.sum
-
-# Wails / IDE
-frontend/wailsjs/
+# OS / IDE
 .idea/
 .vscode/
 *.swp
 .DS_Store
 Thumbs.db
-
-# Local
 *.log
 .tmp/
 .cache/
+
+# Root tooling
+.tools/
+*.apk
+*.aab
+
+# Desktop (also has desktop/.gitignore)
+desktop/build/bin/
+desktop/*.exe
+desktop/vendor/
+desktop/frontend/wailsjs/
+
+# Android (also has android/.gitignore)
+android/.gradle/
+android/.kotlin/
+android/.tools/
+android/local.properties
+android/**/build/
+android/.idea/
+
+# Server
+server/data/
+server/folio-server
+server/folio-server.exe
