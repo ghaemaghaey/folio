@@ -77,6 +77,7 @@
     "OPDSSearch",
     "OPDSFetchPage",
     "OPDSDownload",
+    "UploadLocalFile",
   ];
   var App = {};
   methods.forEach(function (m) {

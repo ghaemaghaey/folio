@@ -284,6 +284,119 @@ class AppFacade(
         pdf.closeDocument()
     }
 
+    /**
+     * Upload a local file path to Folio API. Emits folio:upload-progress events.
+     */
+    fun uploadLocalFile(
+        apiBase: String,
+        token: String,
+        filePath: String,
+        title: String,
+        author: String
+    ): JSONObject {
+        var base = apiBase.trim().trimEnd('/')
+        if (base.isEmpty()) throw IllegalArgumentException("api base is empty")
+        if (token.isBlank()) throw IllegalArgumentException("not signed in")
+        var path = filePath.trim()
+        var useTitle = title
+        if (path.isEmpty()) {
+            lock.withLock {
+                openDoc?.let {
+                    path = it.path
+                    if (useTitle.isBlank()) useTitle = it.title
+                }
+            }
+        }
+        if (path.isEmpty()) throw IllegalArgumentException("no local book path")
+        val file = File(path)
+        if (!file.exists()) throw IllegalArgumentException("file not found")
+        if (useTitle.isBlank()) useTitle = titleFromPath(path)
+
+        fun emit(percent: Double, done: Boolean, message: String) {
+            eventSink(
+                "folio:upload-progress",
+                JSONObject()
+                    .put("percent", percent)
+                    .put("done", done)
+                    .put("message", message)
+            )
+        }
+        emit(0.0, false, "Preparing…")
+
+        val boundary = "FolioBoundary${System.currentTimeMillis()}"
+        val url = java.net.URL("$base/books/upload")
+        val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
+            requestMethod = "POST"
+            doOutput = true
+            connectTimeout = 30_000
+            readTimeout = 600_000
+            setRequestProperty("Authorization", "Bearer $token")
+            setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+            setRequestProperty("User-Agent", "Folio-Android/0.6.6")
+        }
+
+        val total = file.length().coerceAtLeast(1)
+        conn.outputStream.use { out ->
+            val writer = java.io.BufferedOutputStream(out)
+            fun writeStr(s: String) = writer.write(s.toByteArray(Charsets.UTF_8))
+
+            writeStr("--$boundary\r\n")
+            writeStr("Content-Disposition: form-data; name=\"title\"\r\n\r\n")
+            writeStr("$useTitle\r\n")
+            if (author.isNotBlank()) {
+                writeStr("--$boundary\r\n")
+                writeStr("Content-Disposition: form-data; name=\"author\"\r\n\r\n")
+                writeStr("$author\r\n")
+            }
+            writeStr("--$boundary\r\n")
+            writeStr(
+                "Content-Disposition: form-data; name=\"file\"; filename=\"${file.name}\"\r\n"
+            )
+            writeStr("Content-Type: application/octet-stream\r\n\r\n")
+            writer.flush()
+
+            file.inputStream().use { input ->
+                val buf = ByteArray(256 * 1024)
+                var written = 0L
+                var lastPct = -1L
+                while (true) {
+                    val n = input.read(buf)
+                    if (n <= 0) break
+                    writer.write(buf, 0, n)
+                    written += n
+                    var pct = written * 100 / total
+                    if (pct > 90) pct = 90
+                    if (pct != lastPct) {
+                        lastPct = pct
+                        emit(pct.toDouble(), false, "Uploading…")
+                    }
+                }
+            }
+            writeStr("\r\n--$boundary--\r\n")
+            writer.flush()
+        }
+        emit(92.0, false, "Sending…")
+        val code = conn.responseCode
+        val bodyStream = if (code in 200..299) conn.inputStream else conn.errorStream
+        val raw = bodyStream?.bufferedReader()?.readText().orEmpty()
+        conn.disconnect()
+        if (code !in 200..299) {
+            val msg = try {
+                JSONObject(raw).optString("error").ifBlank { raw.ifBlank { "HTTP $code" } }
+            } catch (_: Exception) {
+                raw.ifBlank { "HTTP $code" }
+            }
+            emit(0.0, true, msg)
+            throw IllegalStateException(msg)
+        }
+        emit(100.0, true, "Upload complete")
+        return try {
+            JSONObject(raw)
+        } catch (_: Exception) {
+            JSONObject().put("raw", raw)
+        }
+    }
+
     fun openExternalUrl(url: String) {
         val u = url.trim()
         val lower = u.lowercase()

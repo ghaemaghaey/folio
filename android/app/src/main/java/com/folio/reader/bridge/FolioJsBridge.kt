@@ -154,6 +154,13 @@ class FolioJsBridge(
                 args.optString(2),
                 args.optString(3)
             )
+            "UploadLocalFile" -> app.uploadLocalFile(
+                args.optString(0),
+                args.optString(1),
+                args.optString(2),
+                args.optString(3),
+                args.optString(4)
+            )
             else -> throw IllegalArgumentException("Unknown method: $method")
         }
     }
@@ -211,7 +218,7 @@ class FolioJsBridge(
     'RenderCurrentPage','RenderPDFPage','PrefetchPDFPage','PrefetchPDFPages',
     'SaveProgress','SaveBookProgress','GetProgress','GetBookProgress',
     'ResolveEPUBLink','OpenExternalURL','GetOPDSSettings','SaveOPDSSettings',
-    'OPDSOpenLibrary','OPDSSearch','OPDSFetchPage','OPDSDownload'
+    'OPDSOpenLibrary','OPDSSearch','OPDSFetchPage','OPDSDownload','UploadLocalFile'
   ];
   var App = {};
   methods.forEach(function (m) {

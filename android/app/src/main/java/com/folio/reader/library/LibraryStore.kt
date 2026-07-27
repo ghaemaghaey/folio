@@ -156,15 +156,25 @@ class LibraryStore(private val path: File) {
     private fun probeStatus(b: Book): BookStatus {
         val f = File(b.path)
         if (!f.exists()) return BookStatus.MISSING
-        if (b.fingerprint.isNotBlank()) {
-            try {
-                val fp = fingerprintFile(f)
-                if (fp != b.fingerprint) return BookStatus.REPLACED
-            } catch (_: Exception) {
-                return BookStatus.MISSING
+        val size = f.length()
+        // Fast path: same size → skip 64KiB rehash (startup-critical).
+        if (b.fileSize > 0 && size == b.fileSize) return BookStatus.OK
+        if (b.fileSize > 0 && size != b.fileSize) {
+            if (b.fingerprint.isNotBlank()) {
+                return try {
+                    if (fingerprintFile(f) != b.fingerprint) BookStatus.REPLACED else BookStatus.OK
+                } catch (_: Exception) {
+                    BookStatus.MISSING
+                }
             }
-        } else if (b.fileSize > 0 && f.length() != b.fileSize) {
             return BookStatus.REPLACED
+        }
+        if (b.fingerprint.isNotBlank()) {
+            return try {
+                if (fingerprintFile(f) != b.fingerprint) BookStatus.REPLACED else BookStatus.OK
+            } catch (_: Exception) {
+                BookStatus.MISSING
+            }
         }
         return BookStatus.OK
     }

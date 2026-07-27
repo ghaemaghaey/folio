@@ -2192,6 +2192,32 @@ html[data-font="gandom"] .epub-content {
   cursor: not-allowed;
 }
 
+/* Reader chrome: upload open local book */
+.btn--reader-upload {
+  gap: 0.35rem;
+  padding: 0.35rem 0.65rem;
+  font-size: var(--text-sm);
+  border-radius: var(--radius-pill);
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+}
+.btn--reader-upload:hover {
+  background: color-mix(in srgb, var(--accent) 22%, var(--surface-elevated));
+}
+.btn--reader-upload.is-hidden {
+  display: none !important;
+}
+.btn--reader-upload .icon {
+  width: 1.05rem;
+  height: 1.05rem;
+}
+
+/* Faster first paint: avoid blocking on remote fonts forever */
+html {
+  font-display: swap;
+}
+
 @media (max-width: 640px) {
   .btn-label {
     /* keep account label visible on mobile when possible */

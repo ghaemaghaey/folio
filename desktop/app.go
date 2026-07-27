@@ -1,12 +1,19 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"mime/multipart"
+	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/folio-reader/folio/internal/epub"
 	"github.com/folio-reader/folio/internal/library"
@@ -77,12 +84,16 @@ func NewApp() *App {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
-	// Do not block the first paint: library + PDFium load lazily on demand.
-	// Kick library open in the background so the shelf is ready moments later.
+	// Do not block first paint. Library is cheap JSON; PDFium WASM is heavy —
+	// defer warm-up so the window can show and GetLibrary returns immediately.
 	go a.ensureLibrary()
-	// Warm PDFium WASM in the background so the first PDF open is much faster.
-	// This is the main "first run is slow" cost (WASM compile + pool start).
+	// Warm PDFium after a short idle so it does not compete with UI/JS on cold start.
 	go func() {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(8 * time.Second):
+		}
 		if err := a.ensureRenderer(); err != nil {
 			runtime.LogWarningf(ctx, "pdfium warm-up: %v", err)
 		}
@@ -861,6 +872,144 @@ func (a *App) CloseDocument() {
 	if renderer != nil {
 		renderer.CloseDocument()
 	}
+}
+
+// UploadLocalFile streams a local book path to the Folio API (multipart).
+// Emits "folio:upload-progress" events: { percent, done, message }.
+// apiBase e.g. https://api.ghaemghh.ir — empty path uses currently open document.
+func (a *App) UploadLocalFile(apiBase, token, filePath, title, author string) (map[string]interface{}, error) {
+	apiBase = strings.TrimRight(strings.TrimSpace(apiBase), "/")
+	token = strings.TrimSpace(token)
+	if apiBase == "" {
+		return nil, fmt.Errorf("api base is empty")
+	}
+	if token == "" {
+		return nil, fmt.Errorf("not signed in")
+	}
+	path := strings.TrimSpace(filePath)
+	if path == "" {
+		a.mu.Lock()
+		if a.openDoc != nil {
+			path = a.openDoc.Path
+			if title == "" {
+				title = a.openDoc.Title
+			}
+		}
+		a.mu.Unlock()
+	}
+	if path == "" {
+		return nil, fmt.Errorf("no local book path")
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("file: %w", err)
+	}
+	if title == "" {
+		title = titleFromPath(path)
+	}
+
+	emit := func(percent float64, done bool, msg string) {
+		if a.ctx == nil {
+			return
+		}
+		runtime.EventsEmit(a.ctx, "folio:upload-progress", map[string]interface{}{
+			"percent": percent,
+			"done":    done,
+			"message": msg,
+		})
+	}
+	emit(0, false, "Preparing…")
+
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	_ = w.WriteField("title", title)
+	if author != "" {
+		_ = w.WriteField("author", author)
+	}
+	part, err := w.CreateFormFile("file", filepath.Base(path))
+	if err != nil {
+		return nil, err
+	}
+	// Copy with progress on read side
+	total := st.Size()
+	var written int64
+	buf := make([]byte, 256*1024)
+	var lastPct int64 = -1
+	for {
+		n, rerr := f.Read(buf)
+		if n > 0 {
+			if _, werr := part.Write(buf[:n]); werr != nil {
+				return nil, werr
+			}
+			written += int64(n)
+			if total > 0 {
+				pct := written * 100 / total
+				// Cap prep phase at 90% so server processing can fill the rest
+				if pct > 90 {
+					pct = 90
+				}
+				if pct != lastPct {
+					lastPct = pct
+					emit(float64(pct), false, "Uploading…")
+				}
+			}
+		}
+		if rerr == io.EOF {
+			break
+		}
+		if rerr != nil {
+			return nil, rerr
+		}
+	}
+	if err := w.Close(); err != nil {
+		return nil, err
+	}
+
+	emit(92, false, "Sending…")
+	req, err := http.NewRequest(http.MethodPost, apiBase+"/books/upload", &body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("User-Agent", "Folio-Desktop/0.6.6")
+
+	client := &http.Client{Timeout: 10 * time.Minute}
+	res, err := client.Do(req)
+	if err != nil {
+		emit(0, true, err.Error())
+		return nil, err
+	}
+	defer res.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(res.Body, 4<<20))
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		msg := strings.TrimSpace(string(raw))
+		if msg == "" {
+			msg = fmt.Sprintf("HTTP %d", res.StatusCode)
+		}
+		// try parse error field
+		var er struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(raw, &er) == nil && er.Error != "" {
+			msg = er.Error
+		}
+		emit(0, true, msg)
+		return nil, fmt.Errorf("%s", msg)
+	}
+	var out map[string]interface{}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		emit(100, true, "Done")
+		return map[string]interface{}{"raw": string(raw)}, nil
+	}
+	emit(100, true, "Upload complete")
+	return out, nil
 }
 
 func titleFromPath(path string) string {

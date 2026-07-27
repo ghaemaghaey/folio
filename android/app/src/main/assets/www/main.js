@@ -99,6 +99,8 @@ const account = {
   userId: parseInt(localStorage.getItem(AUTH_USER_ID_KEY) || "0", 10) || 0,
   mode: "login", // login | register
   uploadFile: null,
+  /** When set, upload uses native path (open local book) instead of &lt;input type=file&gt;. */
+  uploadLocalPath: "",
   uploading: false,
 };
 
@@ -225,6 +227,7 @@ const el = {
   uploadCancel: $("#upload-cancel"),
   uploadSubmit: $("#upload-submit"),
   uploadSubmitSpinner: $("#upload-submit-spinner"),
+  readerUpload: $("#btn-reader-upload"),
   readerTheme: $("#btn-reader-theme"),
   back: $("#btn-back"),
   prev: $("#btn-prev"),
@@ -1121,6 +1124,12 @@ function showReader() {
   hideChrome(); // start distraction-free
   el.stage.focus({ preventScroll: true });
   applyGuideUI();
+  updateReaderUploadButton();
+}
+
+function updateReaderUploadButton() {
+  const show = !!(state.doc && state.doc.path);
+  el.readerUpload?.classList.toggle("is-hidden", !show);
 }
 
 // ─── Shelf (unchanged flow) ──────────────────────────────────
@@ -2574,6 +2583,30 @@ function openUploadModal() {
   showModal(el.uploadModal);
 }
 
+/** Prefill upload modal from the currently open local book (reader Upload). */
+function openUploadModalForOpenBook() {
+  if (!state.doc?.path) {
+    toast("No local book open", true);
+    return;
+  }
+  if (!requireLoginForUpload()) return;
+  closeAccountModal();
+  resetUploadForm();
+  account.uploadLocalPath = state.doc.path;
+  account.uploadFile = null;
+  const base = (state.doc.path || "").split(/[/\\]/).pop() || "book";
+  if (el.uploadTitle) el.uploadTitle.value = state.doc.title || base.replace(/\.(pdf|epub)$/i, "");
+  if (el.uploadAuthor) el.uploadAuthor.value = "";
+  if (el.uploadFileName) {
+    el.uploadFileName.textContent = base;
+    el.uploadFileName.classList.remove("is-hidden");
+  }
+  if (el.uploadDropTitle) el.uploadDropTitle.textContent = "Selected from library";
+  el.uploadDrop?.classList.add("is-ready");
+  if (el.uploadSubmit) el.uploadSubmit.disabled = false;
+  showModal(el.uploadModal);
+}
+
 function closeUploadModal() {
   if (account.uploading) return;
   hideModal(el.uploadModal);
@@ -2582,6 +2615,7 @@ function closeUploadModal() {
 
 function resetUploadForm() {
   account.uploadFile = null;
+  account.uploadLocalPath = "";
   if (el.uploadFile) el.uploadFile.value = "";
   if (el.uploadTitle) el.uploadTitle.value = "";
   if (el.uploadAuthor) el.uploadAuthor.value = "";
@@ -2680,7 +2714,9 @@ async function submitUpload() {
     requireLoginForUpload();
     return;
   }
-  if (!account.uploadFile || account.uploading) return;
+  const hasFile = !!account.uploadFile;
+  const hasLocal = !!(account.uploadLocalPath && (hasWails() || typeof window.FolioAndroid !== "undefined"));
+  if ((!hasFile && !hasLocal) || account.uploading) return;
   account.uploading = true;
   if (el.uploadSubmit) el.uploadSubmit.disabled = true;
   el.uploadSubmitSpinner?.classList.remove("is-hidden");
@@ -2690,12 +2726,31 @@ async function submitUpload() {
   try {
     const title = (el.uploadTitle?.value || "").trim();
     const author = (el.uploadAuthor?.value || "").trim();
-    const result = await uploadBookWithProgress(
-      account.uploadFile,
-      title,
-      author,
-      (pct) => setUploadProgress(pct, pct < 100 ? "Uploading…" : "Processing…")
-    );
+    let result;
+    if (hasLocal && hasWails() && typeof api().UploadLocalFile === "function") {
+      // Desktop: stream file from disk via Go (progress via events)
+      const unsub = wireNativeUploadProgress();
+      try {
+        result = await api().UploadLocalFile(
+          FOLIO_API_BASE,
+          account.token,
+          account.uploadLocalPath,
+          title,
+          author
+        );
+      } finally {
+        unsub?.();
+      }
+    } else if (hasFile) {
+      result = await uploadBookWithProgress(
+        account.uploadFile,
+        title,
+        author,
+        (pct) => setUploadProgress(pct, pct < 100 ? "Uploading…" : "Processing…")
+      );
+    } else {
+      throw new Error("No file selected");
+    }
     setUploadProgress(100, result?.deduped ? "Already in library" : "Upload complete");
     const book = result?.book || result;
     toast(
@@ -2712,7 +2767,8 @@ async function submitUpload() {
     account.uploading = false;
     if (el.uploadSubmit) el.uploadSubmit.disabled = false;
     el.uploadSubmitSpinner?.classList.add("is-hidden");
-    if (err.status === 401) {
+    const msg = String(err?.message || err || "Upload failed");
+    if (err.status === 401 || /not signed in|unauthorized|invalid or expired/i.test(msg)) {
       clearAccountSession();
       showUploadError("Session expired — please sign in again.");
       setTimeout(() => {
@@ -2721,7 +2777,22 @@ async function submitUpload() {
       }, 800);
       return;
     }
-    showUploadError(err.message || "Upload failed");
+    showUploadError(msg);
+  }
+}
+
+function wireNativeUploadProgress() {
+  try {
+    const rt = window.runtime;
+    if (!rt || typeof rt.EventsOn !== "function") return () => {};
+    const off = rt.EventsOn("folio:upload-progress", (payload) => {
+      const pct = Number(payload?.percent) || 0;
+      const msg = payload?.message || "Uploading…";
+      setUploadProgress(pct, msg);
+    });
+    return typeof off === "function" ? off : () => {};
+  } catch {
+    return () => {};
   }
 }
 
@@ -2738,6 +2809,10 @@ function wireAccountUI() {
   el.btnAccountLogout?.addEventListener("click", logoutAccount);
   el.btnAccountUpload?.addEventListener("click", () => openUploadModal());
   el.btnCatalogUpload?.addEventListener("click", () => openUploadModal());
+  el.readerUpload?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openUploadModalForOpenBook();
+  });
 
   el.uploadModalClose?.addEventListener("click", () => closeUploadModal());
   el.uploadCancel?.addEventListener("click", () => closeUploadModal());
@@ -3232,20 +3307,29 @@ async function boot() {
     el.version.textContent = "Folio · browser preview";
     return;
   }
-  // One deferred shelf load — no long retry loop (keeps startup snappy)
+  // Snappy start: show version ASAP, load shelf without waiting on PDF engine.
   requestAnimationFrame(() => {
+    // Don't block: AppVersion is sync/fast; shelf must not wait for PDFium.
+    Promise.resolve()
+      .then(async () => {
+        try {
+          const v = await Promise.race([
+            api().AppVersion(),
+            new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 2500)),
+          ]);
+          el.version.textContent = `Folio v${v}`;
+        } catch (_) {
+          el.version.textContent = "Folio";
+        }
+      })
+      .catch(() => {});
+
+    // Shelf as soon as the native bridge answers (library is JSON, not WASM).
     setTimeout(async () => {
-      try {
-        const v = await api().AppVersion();
-        el.version.textContent = `Folio v${v}`;
-      } catch (_) {}
       try {
         await refreshShelf();
       } catch (_) {}
-      // One gentle retry if library file was still opening
-      setTimeout(() => {
-        refreshShelf().catch(() => {});
-      }, 400);
+      setTimeout(() => refreshShelf().catch(() => {}), 600);
     }, 0);
   });
 }

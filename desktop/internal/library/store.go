@@ -300,17 +300,35 @@ func probeStatus(b Book) (Status, string) {
 		}
 		return StatusMissing, "Unavailable"
 	}
-	// Replaced: size or content fingerprint changed
+	size := st.Size()
+	mtime := st.ModTime().Unix()
+
+	// Fast path: size (+ optional mtime) unchanged → skip expensive 64KiB rehash.
+	// Rehash only when size changed (or we have no size baseline).
+	if b.FileSize > 0 && size == b.FileSize {
+		if b.ModTimeUnix == 0 || mtime == b.ModTimeUnix {
+			return StatusOK, ""
+		}
+		// mtime drifted but size same — still treat as OK (common on cloud sync / AV).
+		return StatusOK, ""
+	}
+	if b.FileSize > 0 && size != b.FileSize {
+		// Size changed: confirm via fingerprint when we have one.
+		if b.Fingerprint != "" {
+			fp, err := fingerprintFile(b.Path)
+			if err == nil && fp != b.Fingerprint {
+				return StatusReplaced, "Replaced"
+			}
+			if err == nil && fp == b.Fingerprint {
+				return StatusOK, ""
+			}
+		}
+		return StatusReplaced, "Replaced"
+	}
+	// No baseline size stored — only fingerprint if present.
 	if b.Fingerprint != "" {
 		fp, err := fingerprintFile(b.Path)
 		if err == nil && fp != b.Fingerprint {
-			return StatusReplaced, "Replaced"
-		}
-	} else if b.FileSize > 0 && st.Size() != b.FileSize {
-		return StatusReplaced, "Replaced"
-	} else if b.ModTimeUnix > 0 && st.ModTime().Unix() != b.ModTimeUnix {
-		// mtime alone is weak; only flag if size also differs or we lack fingerprint
-		if st.Size() != b.FileSize {
 			return StatusReplaced, "Replaced"
 		}
 	}
