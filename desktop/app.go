@@ -84,20 +84,34 @@ func NewApp() *App {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
-	// Do not block first paint. Library is cheap JSON; PDFium WASM is heavy —
-	// defer warm-up so the window can show and GetLibrary returns immediately.
+	// Library JSON is cheap — load ASAP for shelf.
 	go a.ensureLibrary()
-	// Warm PDFium after a short idle so it does not compete with UI/JS on cold start.
+	// PDFium WASM compile is the slow part. Start soon after paint (not 8s later)
+	// so the engine is ready when the user opens a PDF. Emit status for the UI.
 	go func() {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(8 * time.Second):
+		case <-time.After(400 * time.Millisecond):
 		}
+		a.emitPDFEngine("starting", "Preparing PDF engine…")
 		if err := a.ensureRenderer(); err != nil {
 			runtime.LogWarningf(ctx, "pdfium warm-up: %v", err)
+			a.emitPDFEngine("error", err.Error())
+			return
 		}
+		a.emitPDFEngine("ready", "PDF engine ready")
 	}()
+}
+
+func (a *App) emitPDFEngine(status, message string) {
+	if a.ctx == nil {
+		return
+	}
+	runtime.EventsEmit(a.ctx, "folio:pdf-engine", map[string]interface{}{
+		"status":  status,
+		"message": message,
+	})
 }
 
 func (a *App) ensureLibrary() {
@@ -134,20 +148,25 @@ func (a *App) ensureRenderer() error {
 	}
 	a.mu.Unlock()
 
-	r, err := pdf.NewRenderer()
-	if err != nil {
-		return fmt.Errorf("pdfium init: %w", err)
+	var lastErr error
+	// First WASM compile can be flaky under antivirus; retry once.
+	for attempt := 0; attempt < 2; attempt++ {
+		r, err := pdf.NewRenderer()
+		if err != nil {
+			lastErr = err
+			time.Sleep(400 * time.Millisecond)
+			continue
+		}
+		a.mu.Lock()
+		if a.renderer == nil {
+			a.renderer = r
+		} else {
+			_ = r.Close()
+		}
+		a.mu.Unlock()
+		return nil
 	}
-
-	a.mu.Lock()
-	if a.renderer == nil {
-		a.renderer = r
-	} else {
-		// Another goroutine won the race — drop ours
-		_ = r.Close()
-	}
-	a.mu.Unlock()
-	return nil
+	return fmt.Errorf("pdfium init: %w", lastErr)
 }
 
 func (a *App) shutdown(ctx context.Context) {
@@ -418,8 +437,10 @@ func (a *App) GetBookProgress(bookID string) map[string]interface{} {
 }
 
 func (a *App) openPDF(path string, existingID string) (*DocumentInfo, error) {
+	path = filepath.Clean(path)
+	a.emitPDFEngine("opening", "Opening PDF…")
 	if err := a.ensureRenderer(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("PDF engine failed to start (WASM). Try again in a few seconds: %w", err)
 	}
 	lib := a.libOrNil()
 
@@ -428,12 +449,28 @@ func (a *App) openPDF(path string, existingID string) (*DocumentInfo, error) {
 	renderer := a.renderer
 	a.mu.Unlock()
 	if renderer == nil {
-		return nil, fmt.Errorf("PDF engine is not ready")
+		return nil, fmt.Errorf("PDF engine is not ready — wait a moment and try again")
 	}
 
 	count, err := renderer.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("open PDF: %w", err)
+		// One recovery path: rebuild engine and retry (instance can die after crash).
+		a.mu.Lock()
+		if a.renderer != nil {
+			_ = a.renderer.Close()
+			a.renderer = nil
+		}
+		a.mu.Unlock()
+		if err2 := a.ensureRenderer(); err2 != nil {
+			return nil, fmt.Errorf("open PDF: %v (retry init: %v)", err, err2)
+		}
+		a.mu.Lock()
+		renderer = a.renderer
+		a.mu.Unlock()
+		count, err = renderer.Open(path)
+		if err != nil {
+			return nil, fmt.Errorf("open PDF: %w", err)
+		}
 	}
 
 	meta, err := library.InspectFile(path)

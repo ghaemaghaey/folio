@@ -10,6 +10,8 @@ import (
 	"image/jpeg"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,6 +19,7 @@ import (
 	"github.com/klippa-app/go-pdfium/references"
 	"github.com/klippa-app/go-pdfium/requests"
 	"github.com/klippa-app/go-pdfium/webassembly"
+	"github.com/tetratelabs/wazero"
 )
 
 // Renderer wraps go-pdfium with WebAssembly + session + memory/disk page cache.
@@ -50,16 +53,20 @@ type cacheEntry struct {
 
 // NewRenderer initializes a PDFium worker pool using WebAssembly.
 func NewRenderer() (*Renderer, error) {
+	fs := windowsFriendlyFS()
 	pool, err := webassembly.Init(webassembly.Config{
-		MinIdle:  1,
-		MaxIdle:  1,
-		MaxTotal: 1,
+		MinIdle:      1,
+		MaxIdle:      1,
+		MaxTotal:     1,
+		FSConfig:     fs,
+		ReuseWorkers: true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("pdfium webassembly init: %w", err)
 	}
 
-	instance, err := pool.GetInstance(30 * time.Second)
+	// First compile of pdfium.wasm can take several seconds on Windows.
+	instance, err := pool.GetInstance(90 * time.Second)
 	if err != nil {
 		_ = pool.Close()
 		return nil, fmt.Errorf("pdfium get instance: %w", err)
@@ -75,6 +82,36 @@ func NewRenderer() (*Renderer, error) {
 		cacheCap: 96,
 		diskRoot: diskRoot,
 	}, nil
+}
+
+// windowsFriendlyFS mounts every existing drive letter so FilePath access works
+// no matter which volume the book lives on (C:, D:, …). In-memory File: opens
+// do not need this, but some PDFium ops still touch the VFS.
+func windowsFriendlyFS() wazero.FSConfig {
+	fs := wazero.NewFSConfig()
+	if runtime.GOOS != "windows" {
+		return fs.WithDirMount("/", "/")
+	}
+	// Mount each drive under /c, /d, … and also map C:\ → / as default root.
+	for c := 'A'; c <= 'Z'; c++ {
+		root := string(c) + `:\`
+		if _, err := os.Stat(root); err != nil {
+			continue
+		}
+		letter := strings.ToLower(string(c))
+		fs = fs.WithDirMount(root, "/"+letter)
+		if c == 'C' {
+			fs = fs.WithDirMount(root, "/")
+		}
+	}
+	// Fallback: at least mount the volume of the working directory.
+	if cwd, err := os.Getwd(); err == nil {
+		vol := filepath.VolumeName(cwd)
+		if vol != "" {
+			fs = fs.WithDirMount(vol+`\`, "/")
+		}
+	}
+	return fs
 }
 
 func defaultDiskRoot() (string, error) {
@@ -121,6 +158,7 @@ func (r *Renderer) openLocked(path string) (int, error) {
 	if r.instance == nil {
 		return 0, fmt.Errorf("renderer closed")
 	}
+	path = filepath.Clean(path)
 	if r.hasDoc && r.openPath == path {
 		return r.pageCount, nil
 	}
@@ -128,14 +166,29 @@ func (r *Renderer) openLocked(path string) (int, error) {
 
 	pdfBytes, err := os.ReadFile(path)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("read file: %w", err)
 	}
+	if len(pdfBytes) < 5 {
+		return 0, fmt.Errorf("file is empty or too small")
+	}
+	// Keep an independent backing array for the WASM lifetime of the document.
+	kept := make([]byte, len(pdfBytes))
+	copy(kept, pdfBytes)
 
 	doc, err := r.instance.OpenDocument(&requests.OpenDocument{
-		File: &pdfBytes,
+		File: &kept,
 	})
 	if err != nil {
-		return 0, fmt.Errorf("open document: %w", err)
+		// Fallback: FilePath in POSIX form (may help some PDFs / code paths).
+		posix := toPOSIXPath(path)
+		doc, err = r.instance.OpenDocument(&requests.OpenDocument{
+			FilePath: &posix,
+		})
+		if err != nil {
+			return 0, fmt.Errorf("open document: %w", err)
+		}
+		// When opening by path we still keep bytes nil; document is held by path.
+		kept = nil
 	}
 
 	pageCount, err := r.instance.FPDF_GetPageCount(&requests.FPDF_GetPageCount{
@@ -143,18 +196,52 @@ func (r *Renderer) openLocked(path string) (int, error) {
 	})
 	if err != nil {
 		_, _ = r.instance.FPDF_CloseDocument(&requests.FPDF_CloseDocument{Document: doc.Document})
-		return 0, err
+		return 0, fmt.Errorf("page count: %w", err)
+	}
+	if pageCount.PageCount < 1 {
+		_, _ = r.instance.FPDF_CloseDocument(&requests.FPDF_CloseDocument{Document: doc.Document})
+		return 0, fmt.Errorf("PDF has no pages")
 	}
 
 	r.openPath = path
-	r.openBytes = pdfBytes
+	r.openBytes = kept
 	r.docRef = doc.Document
 	r.pageCount = pageCount.PageCount
 	r.hasDoc = true
-	r.docHash = hashDoc(path, pdfBytes)
-	// Keep memory cache only for this document session
+	if kept != nil {
+		r.docHash = hashDoc(path, kept)
+	} else {
+		r.docHash = hashDoc(path, pdfBytes)
+	}
 	r.clearCacheLocked()
 	return r.pageCount, nil
+}
+
+// toPOSIXPath converts a Windows path for go-pdfium WASM VFS.
+// C:\foo\bar.pdf → /c/foo/bar.pdf when drives are mounted as /c, /d, …
+func toPOSIXPath(path string) string {
+	path = filepath.Clean(path)
+	if runtime.GOOS != "windows" {
+		if filepath.IsAbs(path) {
+			return filepath.ToSlash(path)
+		}
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			return filepath.ToSlash(path)
+		}
+		return filepath.ToSlash(abs)
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		abs = path
+	}
+	vol := filepath.VolumeName(abs)
+	if vol == "" {
+		return filepath.ToSlash(abs)
+	}
+	rest := strings.TrimPrefix(abs, vol)
+	letter := strings.ToLower(strings.TrimSuffix(vol, ":"))
+	return "/" + letter + filepath.ToSlash(rest)
 }
 
 // CloseDocument closes the current PDF session (keeps the engine + disk cache).
@@ -204,6 +291,7 @@ func (r *Renderer) RenderPage(path string, pageIndex int, dpi int) (dataURL stri
 		dpi = 200
 	}
 
+	path = filepath.Clean(path)
 	if !r.hasDoc || r.openPath != path {
 		if _, err := r.openLocked(path); err != nil {
 			return "", 0, 0, err
@@ -357,4 +445,3 @@ func hashDoc(path string, data []byte) string {
 	}
 	return hex.EncodeToString(h.Sum(nil))[:24]
 }
-

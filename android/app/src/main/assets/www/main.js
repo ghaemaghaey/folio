@@ -1114,6 +1114,18 @@ function wireOPDSProgressEvents() {
       }
       refreshCatalogCard(id);
     });
+    // PDF engine warm-up status (WASM can take several seconds once per launch)
+    rt.EventsOn("folio:pdf-engine", (payload) => {
+      const st = payload?.status;
+      const msg = payload?.message || "";
+      if (st === "starting" || st === "opening") {
+        toast(msg || "Preparing PDF engine…", false, 12000);
+      } else if (st === "ready") {
+        hideToast();
+      } else if (st === "error") {
+        toast("PDF engine: " + (msg || "failed to start"), true, 8000);
+      }
+    });
   } catch (_) {}
 }
 
@@ -1268,10 +1280,14 @@ async function openFile() {
     return;
   }
   try {
+    // PDF engine (WASM) can take a few seconds the first time — show feedback.
+    toast("Opening… first PDF may take a moment while the engine starts", false, 8000);
     const doc = await api().OpenFileDialog();
+    hideToast();
     if (doc) await enterDocument(doc);
   } catch (err) {
-    toast(String(err?.message || err), true);
+    hideToast();
+    toast(String(err?.message || err), true, 8000);
   }
 }
 
@@ -1506,20 +1522,27 @@ async function fetchPDFPage(index, { setCurrent = true } = {}) {
   if (!hasWails()) return null;
   // Prefetch must NOT move the "current page" cursor on the backend
   let page;
-  if (setCurrent) {
-    page = await api().RenderPDFPage(index, dpi());
-  } else if (typeof api().PrefetchPDFPage === "function") {
-    page = await api().PrefetchPDFPage(index, dpi());
-  } else {
-    // Fallback: only warm disk/memory via bulk prefetch API
-    await api().PrefetchPDFPages([index], dpi());
-    page = await api().RenderPDFPage(index, dpi());
-    // Restore cursor if we had to use RenderPDFPage
-    if (state.doc) {
-      try {
-        await api().RenderPDFPage(state.doc.pageIndex | 0, dpi());
-      } catch (_) {}
+  try {
+    if (setCurrent) {
+      page = await api().RenderPDFPage(index, dpi());
+    } else if (typeof api().PrefetchPDFPage === "function") {
+      page = await api().PrefetchPDFPage(index, dpi());
+    } else {
+      // Fallback: only warm disk/memory via bulk prefetch API
+      await api().PrefetchPDFPages([index], dpi());
+      page = await api().RenderPDFPage(index, dpi());
+      // Restore cursor if we had to use RenderPDFPage
+      if (state.doc) {
+        try {
+          await api().RenderPDFPage(state.doc.pageIndex | 0, dpi());
+        } catch (_) {}
+      }
     }
+  } catch (err) {
+    if (setCurrent) {
+      toast("PDF render failed: " + String(err?.message || err), true, 8000);
+    }
+    throw err;
   }
   if (!page) return null;
   const packed = {
