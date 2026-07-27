@@ -51,6 +51,13 @@
               </svg>
               <span class="btn-label">Theme</span>
             </button>
+            <button type="button" class="btn btn--ghost" id="btn-account" title="Account">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="9" r="3.25" fill="none" stroke="currentColor" stroke-width="1.75" />
+                <path d="M5.5 19.2c1.4-2.8 3.7-4.2 6.5-4.2s5.1 1.4 6.5 4.2" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" />
+              </svg>
+              <span class="btn-label" id="btn-account-label">Sign in</span>
+            </button>
             <button type="button" class="btn btn--primary" id="btn-open-file">
               <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" />
@@ -95,6 +102,13 @@
             <div class="catalog-toolbar-actions">
               <button type="button" class="btn btn--ghost" id="btn-catalog-settings" title="OPDS server">
                 Settings
+              </button>
+              <button type="button" class="btn btn--ghost" id="btn-catalog-upload" title="Upload a book to the shared library">
+                <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 16V5M12 5l-4 4M12 5l4 4" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" />
+                  <path d="M5 19h14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" />
+                </svg>
+                <span class="btn-label">Upload</span>
               </button>
               <button type="button" class="btn btn--primary" id="btn-catalog-refresh" title="Reload catalog">
                 Refresh
@@ -304,7 +318,7 @@
 
         <!-- Image lightbox -->
         <div class="lightbox is-hidden" id="lightbox" role="dialog" aria-label="Image">
-          <button type="button" class="lightbox-close" id="lightbox-close" aria-label="Close">×</button>
+          <button type="button" class="lightbox-close" id="lightbox-close" aria-label="Close">&times;</button>
           <img id="lightbox-img" alt="Expanded image" />
         </div>
 
@@ -331,6 +345,109 @@
         <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
       </section>
     </div>
+
+    <!-- Account modal (register / login) -->
+    <div class="modal-overlay is-hidden" id="account-modal" role="dialog" aria-modal="true" aria-labelledby="account-modal-title" hidden>
+      <div class="modal-card account-modal">
+        <button type="button" class="modal-close" id="account-modal-close" aria-label="Close">&times;</button>
+        <div class="account-modal-head">
+          <div class="account-avatar" aria-hidden="true">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="9" r="3.5" stroke="currentColor" stroke-width="1.6" />
+              <path d="M5 19.2c1.5-3 4-4.5 7-4.5s5.5 1.5 7 4.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+            </svg>
+          </div>
+          <h2 class="modal-title" id="account-modal-title">Welcome to Folio</h2>
+          <p class="modal-sub" id="account-modal-sub">
+            Browse and download freely. Sign in only if you want to upload books to the shared library.
+          </p>
+        </div>
+
+        <div class="account-tabs" role="tablist">
+          <button type="button" class="account-tab is-active" id="account-tab-login" role="tab" aria-selected="true">Sign in</button>
+          <button type="button" class="account-tab" id="account-tab-register" role="tab" aria-selected="false">Create account</button>
+        </div>
+
+        <form id="account-form" class="account-form" autocomplete="on">
+          <label class="catalog-field">
+            <span>Username</span>
+            <input type="text" id="account-username" name="username" required minlength="2" maxlength="64" autocomplete="username" spellcheck="false" placeholder="your name" />
+          </label>
+          <label class="catalog-field">
+            <span>Password</span>
+            <input type="password" id="account-password" name="password" required minlength="6" autocomplete="current-password" placeholder="at least 6 characters" />
+          </label>
+          <p class="account-error is-hidden" id="account-error" role="alert"></p>
+          <button type="submit" class="btn btn--primary btn--lg account-submit" id="account-submit">
+            <span class="btn-label" id="account-submit-label">Sign in</span>
+            <span class="btn-spinner is-hidden" id="account-submit-spinner" aria-hidden="true"></span>
+          </button>
+        </form>
+
+        <div class="account-logged-in is-hidden" id="account-logged-in">
+          <p class="account-hello">Signed in as <strong id="account-username-display"></strong></p>
+          <p class="modal-sub">You can upload books to the shared Calibre library from the Catalog tab.</p>
+          <div class="account-logged-actions">
+            <button type="button" class="btn btn--primary" id="btn-account-upload">Upload a book</button>
+            <button type="button" class="btn btn--ghost" id="btn-account-logout">Sign out</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Upload modal -->
+    <div class="modal-overlay is-hidden" id="upload-modal" role="dialog" aria-modal="true" aria-labelledby="upload-modal-title" hidden>
+      <div class="modal-card upload-modal">
+        <button type="button" class="modal-close" id="upload-modal-close" aria-label="Close">&times;</button>
+        <h2 class="modal-title" id="upload-modal-title">Upload to library</h2>
+        <p class="modal-sub">PDF or EPUB · added to the shared catalog for everyone to download</p>
+
+        <div class="upload-drop" id="upload-drop" tabindex="0">
+          <input type="file" id="upload-file" accept=".pdf,.epub,application/pdf,application/epub+zip" hidden />
+          <div class="upload-drop-icon" aria-hidden="true">
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none">
+              <path d="M12 16V5M12 5l-4.2 4.2M12 5l4.2 4.2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+              <path d="M5 19h14" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
+            </svg>
+          </div>
+          <p class="upload-drop-title" id="upload-drop-title">Drop a book here</p>
+          <p class="upload-drop-hint">or click to choose a PDF / EPUB</p>
+          <p class="upload-file-name is-hidden" id="upload-file-name"></p>
+        </div>
+
+        <div class="upload-fields">
+          <label class="catalog-field">
+            <span>Title <em>(optional)</em></span>
+            <input type="text" id="upload-title" placeholder="Leave empty to use filename" autocomplete="off" spellcheck="false" />
+          </label>
+          <label class="catalog-field">
+            <span>Author <em>(optional)</em></span>
+            <input type="text" id="upload-author" placeholder="Unknown" autocomplete="off" spellcheck="false" />
+          </label>
+        </div>
+
+        <div class="upload-progress-wrap is-hidden" id="upload-progress-wrap">
+          <div class="upload-progress-meta">
+            <span id="upload-progress-label">Uploading…</span>
+            <span id="upload-progress-pct">0%</span>
+          </div>
+          <div class="upload-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="upload-progress-bar">
+            <div class="upload-progress-fill" id="upload-progress-fill"></div>
+          </div>
+        </div>
+
+        <p class="account-error is-hidden" id="upload-error" role="alert"></p>
+
+        <div class="upload-actions">
+          <button type="button" class="btn btn--ghost" id="upload-cancel">Cancel</button>
+          <button type="button" class="btn btn--primary" id="upload-submit" disabled>
+            <span class="btn-label">Upload</span>
+            <span class="btn-spinner is-hidden" id="upload-submit-spinner" aria-hidden="true"></span>
+          </button>
+        </div>
+      </div>
+    </div>
+
     <script src="main.js"></script>
   </body>
 </html>

@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.view.ViewGroup
+import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
@@ -31,6 +32,8 @@ class MainActivity : AppCompatActivity(), FolioJsBridge.HostActions {
 
     private var pendingPickCallbackId: String? = null
     private var pendingRemapBookId: String? = null
+    /** For HTML &lt;input type="file"&gt; (account book upload). */
+    private var filePathCallback: ValueCallback<Array<Uri>>? = null
 
     private val openBookLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -76,6 +79,17 @@ class MainActivity : AppCompatActivity(), FolioJsBridge.HostActions {
         }.start()
     }
 
+    private val htmlFileChooserLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val cb = filePathCallback
+        filePathCallback = null
+        if (cb == null) return@registerForActivityResult
+        val data = result.data
+        val uris = WebChromeClient.FileChooserParams.parseResult(result.resultCode, data)
+        cb.onReceiveValue(uris)
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -118,7 +132,37 @@ class MainActivity : AppCompatActivity(), FolioJsBridge.HostActions {
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
 
         webView.addJavascriptInterface(bridge, "FolioAndroid")
-        webView.webChromeClient = WebChromeClient()
+        webView.webChromeClient = object : WebChromeClient() {
+            override fun onShowFileChooser(
+                webView: WebView?,
+                filePathCallback: ValueCallback<Array<Uri>>?,
+                fileChooserParams: FileChooserParams?
+            ): Boolean {
+                this@MainActivity.filePathCallback?.onReceiveValue(null)
+                this@MainActivity.filePathCallback = filePathCallback
+                return try {
+                    val intent = fileChooserParams?.createIntent()
+                        ?: Intent(Intent.ACTION_GET_CONTENT).apply {
+                            addCategory(Intent.CATEGORY_OPENABLE)
+                            type = "*/*"
+                            putExtra(
+                                Intent.EXTRA_MIME_TYPES,
+                                arrayOf(
+                                    "application/pdf",
+                                    "application/epub+zip",
+                                    "application/octet-stream"
+                                )
+                            )
+                        }
+                    htmlFileChooserLauncher.launch(intent)
+                    true
+                } catch (e: Exception) {
+                    this@MainActivity.filePathCallback = null
+                    filePathCallback?.onReceiveValue(null)
+                    false
+                }
+            }
+        }
         webView.webViewClient = object : WebViewClient() {
             override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
                 view?.evaluateJavascript(FolioJsBridge.BOOTSTRAP_JS, null)

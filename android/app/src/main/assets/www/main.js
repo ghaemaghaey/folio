@@ -79,11 +79,84 @@ const state = {
 /** Built-in Calibre-Web (open OPDS, no auth). */
 const DEFAULT_OPDS_BASE = "https://calibre.ghaemghh.ir";
 
+/** Folio cloud API (auth + library upload). Browse/download stay public via OPDS. */
+const FOLIO_API_BASE = (localStorage.getItem("folio.apiBase") || "https://api.ghaemghh.ir").replace(/\/$/, "");
+const AUTH_TOKEN_KEY = "folio.auth.token";
+const AUTH_USER_KEY = "folio.auth.username";
+const AUTH_USER_ID_KEY = "folio.auth.userId";
+
 function hasWails() {
   return typeof window.go !== "undefined" && window.go?.main?.App;
 }
 function api() {
   return window.go.main.App;
+}
+
+/** Session for folio-server (persisted). App works without login. */
+const account = {
+  token: localStorage.getItem(AUTH_TOKEN_KEY) || "",
+  username: localStorage.getItem(AUTH_USER_KEY) || "",
+  userId: parseInt(localStorage.getItem(AUTH_USER_ID_KEY) || "0", 10) || 0,
+  mode: "login", // login | register
+  uploadFile: null,
+  uploading: false,
+};
+
+function isLoggedIn() {
+  return !!(account.token && account.username);
+}
+
+function saveAccountSession(token, username, userId) {
+  account.token = token || "";
+  account.username = username || "";
+  account.userId = userId || 0;
+  if (account.token) {
+    localStorage.setItem(AUTH_TOKEN_KEY, account.token);
+    localStorage.setItem(AUTH_USER_KEY, account.username);
+    localStorage.setItem(AUTH_USER_ID_KEY, String(account.userId));
+  } else {
+    localStorage.removeItem(AUTH_TOKEN_KEY);
+    localStorage.removeItem(AUTH_USER_KEY);
+    localStorage.removeItem(AUTH_USER_ID_KEY);
+  }
+  updateAccountChrome();
+}
+
+function clearAccountSession() {
+  saveAccountSession("", "", 0);
+}
+
+async function folioApi(path, { method = "GET", body, token, formData } = {}) {
+  const headers = {};
+  const auth = token !== undefined ? token : account.token;
+  if (auth) headers["Authorization"] = `Bearer ${auth}`;
+  let payload = body;
+  if (formData) {
+    payload = formData;
+  } else if (body != null && typeof body === "object") {
+    headers["Content-Type"] = "application/json";
+    payload = JSON.stringify(body);
+  }
+  const res = await fetch(`${FOLIO_API_BASE}${path}`, {
+    method,
+    headers,
+    body: payload,
+  });
+  const text = await res.text();
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = { error: text || res.statusText };
+  }
+  if (!res.ok) {
+    const msg = (data && (data.error || data.message)) || `HTTP ${res.status}`;
+    const err = new Error(msg);
+    err.status = res.status;
+    err.data = data;
+    throw err;
+  }
+  return data;
 }
 
 const $ = (s) => document.querySelector(s);
@@ -113,8 +186,45 @@ const el = {
   opdsPass: $("#opds-pass"),
   btnCatalogSettings: $("#btn-catalog-settings"),
   btnCatalogRefresh: $("#btn-catalog-refresh"),
+  btnCatalogUpload: $("#btn-catalog-upload"),
   btnCatalogSetup: $("#btn-catalog-setup"),
   btnOpdsSave: $("#btn-opds-save"),
+  btnAccount: $("#btn-account"),
+  btnAccountLabel: $("#btn-account-label"),
+  accountModal: $("#account-modal"),
+  accountModalClose: $("#account-modal-close"),
+  accountModalTitle: $("#account-modal-title"),
+  accountModalSub: $("#account-modal-sub"),
+  accountTabLogin: $("#account-tab-login"),
+  accountTabRegister: $("#account-tab-register"),
+  accountForm: $("#account-form"),
+  accountUsername: $("#account-username"),
+  accountPassword: $("#account-password"),
+  accountError: $("#account-error"),
+  accountSubmit: $("#account-submit"),
+  accountSubmitLabel: $("#account-submit-label"),
+  accountSubmitSpinner: $("#account-submit-spinner"),
+  accountLoggedIn: $("#account-logged-in"),
+  accountUsernameDisplay: $("#account-username-display"),
+  btnAccountUpload: $("#btn-account-upload"),
+  btnAccountLogout: $("#btn-account-logout"),
+  uploadModal: $("#upload-modal"),
+  uploadModalClose: $("#upload-modal-close"),
+  uploadDrop: $("#upload-drop"),
+  uploadFile: $("#upload-file"),
+  uploadDropTitle: $("#upload-drop-title"),
+  uploadFileName: $("#upload-file-name"),
+  uploadTitle: $("#upload-title"),
+  uploadAuthor: $("#upload-author"),
+  uploadProgressWrap: $("#upload-progress-wrap"),
+  uploadProgressLabel: $("#upload-progress-label"),
+  uploadProgressPct: $("#upload-progress-pct"),
+  uploadProgressBar: $("#upload-progress-bar"),
+  uploadProgressFill: $("#upload-progress-fill"),
+  uploadError: $("#upload-error"),
+  uploadCancel: $("#upload-cancel"),
+  uploadSubmit: $("#upload-submit"),
+  uploadSubmitSpinner: $("#upload-submit-spinner"),
   readerTheme: $("#btn-reader-theme"),
   back: $("#btn-back"),
   prev: $("#btn-prev"),
@@ -2314,9 +2424,371 @@ function buildFontChips() {
   make(FONTS_FA, el.fontFa);
 }
 
+// ─── Folio account (api.ghaemghh.ir) ─────────────────────────
+
+function updateAccountChrome() {
+  const logged = isLoggedIn();
+  if (el.btnAccount) {
+    el.btnAccount.classList.toggle("is-signed-in", logged);
+    el.btnAccount.title = logged ? `Signed in as ${account.username}` : "Sign in";
+  }
+  if (el.btnAccountLabel) {
+    el.btnAccountLabel.textContent = logged ? account.username : "Sign in";
+  }
+  if (el.btnCatalogUpload) {
+    el.btnCatalogUpload.title = logged
+      ? "Upload a book to the shared library"
+      : "Sign in to upload books (browse & download stay free)";
+  }
+}
+
+function showModal(overlay) {
+  if (!overlay) return;
+  overlay.hidden = false;
+  overlay.classList.remove("is-hidden");
+  document.body.style.overflow = "hidden";
+}
+
+function hideModal(overlay) {
+  if (!overlay) return;
+  overlay.classList.add("is-hidden");
+  overlay.hidden = true;
+  if (
+    el.accountModal?.classList.contains("is-hidden") &&
+    el.uploadModal?.classList.contains("is-hidden")
+  ) {
+    document.body.style.overflow = "";
+  }
+}
+
+function setAccountMode(mode) {
+  account.mode = mode === "register" ? "register" : "login";
+  const reg = account.mode === "register";
+  el.accountTabLogin?.classList.toggle("is-active", !reg);
+  el.accountTabRegister?.classList.toggle("is-active", reg);
+  if (el.accountTabLogin) el.accountTabLogin.setAttribute("aria-selected", String(!reg));
+  if (el.accountTabRegister) el.accountTabRegister.setAttribute("aria-selected", String(reg));
+  if (el.accountSubmitLabel) el.accountSubmitLabel.textContent = reg ? "Create account" : "Sign in";
+  if (el.accountPassword) {
+    el.accountPassword.autocomplete = reg ? "new-password" : "current-password";
+  }
+  if (el.accountError) {
+    el.accountError.classList.add("is-hidden");
+    el.accountError.textContent = "";
+  }
+}
+
+function openAccountModal() {
+  const logged = isLoggedIn();
+  el.accountForm?.classList.toggle("is-hidden", logged);
+  el.accountLoggedIn?.classList.toggle("is-hidden", !logged);
+  document.querySelector(".account-tabs")?.classList.toggle("is-hidden", logged);
+  if (el.accountModalTitle) {
+    el.accountModalTitle.textContent = logged ? "Your account" : "Welcome to Folio";
+  }
+  if (el.accountModalSub) {
+    el.accountModalSub.textContent = logged
+      ? "Upload books for everyone, or sign out on this device."
+      : "Browse and download freely. Sign in only if you want to upload books to the shared library.";
+  }
+  if (logged && el.accountUsernameDisplay) {
+    el.accountUsernameDisplay.textContent = account.username;
+  }
+  if (!logged) {
+    setAccountMode(account.mode || "login");
+    if (el.accountPassword) el.accountPassword.value = "";
+  }
+  showModal(el.accountModal);
+  if (!logged) setTimeout(() => el.accountUsername?.focus(), 50);
+}
+
+function closeAccountModal() {
+  hideModal(el.accountModal);
+}
+
+async function submitAccountForm(e) {
+  e?.preventDefault?.();
+  const username = (el.accountUsername?.value || "").trim();
+  const password = el.accountPassword?.value || "";
+  if (username.length < 2) {
+    showAccountError("Username must be at least 2 characters.");
+    return;
+  }
+  if (password.length < 6) {
+    showAccountError("Password must be at least 6 characters.");
+    return;
+  }
+  setAccountBusy(true);
+  showAccountError("");
+  try {
+    const path = account.mode === "register" ? "/register" : "/login";
+    const data = await folioApi(path, {
+      method: "POST",
+      body: { username, password },
+      token: "",
+    });
+    saveAccountSession(data.token, data.username || username, data.user_id || data.userId || 0);
+    toast(account.mode === "register" ? `Welcome, ${account.username}!` : `Signed in as ${account.username}`);
+    openAccountModal(); // refresh to logged-in view
+  } catch (err) {
+    showAccountError(err.message || "Sign-in failed");
+  } finally {
+    setAccountBusy(false);
+  }
+}
+
+function showAccountError(msg) {
+  if (!el.accountError) return;
+  if (!msg) {
+    el.accountError.classList.add("is-hidden");
+    el.accountError.textContent = "";
+    return;
+  }
+  el.accountError.textContent = msg;
+  el.accountError.classList.remove("is-hidden");
+}
+
+function setAccountBusy(busy) {
+  if (el.accountSubmit) el.accountSubmit.disabled = !!busy;
+  el.accountSubmitSpinner?.classList.toggle("is-hidden", !busy);
+}
+
+function logoutAccount() {
+  clearAccountSession();
+  toast("Signed out");
+  closeAccountModal();
+}
+
+function requireLoginForUpload() {
+  if (isLoggedIn()) return true;
+  toast("Sign in to upload books — browsing stays free.");
+  openAccountModal();
+  setAccountMode("login");
+  return false;
+}
+
+function openUploadModal() {
+  if (!requireLoginForUpload()) return;
+  closeAccountModal();
+  resetUploadForm();
+  showModal(el.uploadModal);
+}
+
+function closeUploadModal() {
+  if (account.uploading) return;
+  hideModal(el.uploadModal);
+  resetUploadForm();
+}
+
+function resetUploadForm() {
+  account.uploadFile = null;
+  if (el.uploadFile) el.uploadFile.value = "";
+  if (el.uploadTitle) el.uploadTitle.value = "";
+  if (el.uploadAuthor) el.uploadAuthor.value = "";
+  if (el.uploadFileName) {
+    el.uploadFileName.textContent = "";
+    el.uploadFileName.classList.add("is-hidden");
+  }
+  if (el.uploadDropTitle) el.uploadDropTitle.textContent = "Drop a book here";
+  el.uploadDrop?.classList.remove("is-ready", "is-dragover");
+  if (el.uploadSubmit) el.uploadSubmit.disabled = true;
+  el.uploadProgressWrap?.classList.add("is-hidden");
+  setUploadProgress(0, "Uploading…");
+  showUploadError("");
+  el.uploadSubmitSpinner?.classList.add("is-hidden");
+}
+
+function setUploadFile(file) {
+  if (!file) return;
+  const name = (file.name || "").toLowerCase();
+  const ok =
+    name.endsWith(".pdf") ||
+    name.endsWith(".epub") ||
+    /pdf|epub/.test(file.type || "");
+  if (!ok) {
+    showUploadError("Please choose a PDF or EPUB file.");
+    return;
+  }
+  account.uploadFile = file;
+  showUploadError("");
+  if (el.uploadFileName) {
+    el.uploadFileName.textContent = file.name;
+    el.uploadFileName.classList.remove("is-hidden");
+  }
+  if (el.uploadDropTitle) el.uploadDropTitle.textContent = "Ready to upload";
+  el.uploadDrop?.classList.add("is-ready");
+  if (el.uploadSubmit) el.uploadSubmit.disabled = false;
+  if (el.uploadTitle && !el.uploadTitle.value) {
+    el.uploadTitle.value = file.name.replace(/\.(pdf|epub)$/i, "");
+  }
+}
+
+function showUploadError(msg) {
+  if (!el.uploadError) return;
+  if (!msg) {
+    el.uploadError.classList.add("is-hidden");
+    el.uploadError.textContent = "";
+    return;
+  }
+  el.uploadError.textContent = msg;
+  el.uploadError.classList.remove("is-hidden");
+}
+
+function setUploadProgress(pct, label) {
+  const p = Math.max(0, Math.min(100, Math.round(pct)));
+  if (el.uploadProgressFill) el.uploadProgressFill.style.width = `${p}%`;
+  if (el.uploadProgressPct) el.uploadProgressPct.textContent = `${p}%`;
+  if (el.uploadProgressBar) el.uploadProgressBar.setAttribute("aria-valuenow", String(p));
+  if (label && el.uploadProgressLabel) el.uploadProgressLabel.textContent = label;
+}
+
+function uploadBookWithProgress(file, title, author, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${FOLIO_API_BASE}/books/upload`);
+    xhr.setRequestHeader("Authorization", `Bearer ${account.token}`);
+    xhr.upload.onprogress = (ev) => {
+      if (!ev.lengthComputable) return;
+      onProgress?.((ev.loaded / ev.total) * 100);
+    };
+    xhr.onload = () => {
+      let data = null;
+      try {
+        data = xhr.responseText ? JSON.parse(xhr.responseText) : null;
+      } catch {
+        data = { error: xhr.responseText || xhr.statusText };
+      }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+      else {
+        const err = new Error((data && data.error) || `HTTP ${xhr.status}`);
+        err.status = xhr.status;
+        reject(err);
+      }
+    };
+    xhr.onerror = () => reject(new Error("Network error during upload"));
+    xhr.onabort = () => reject(new Error("Upload cancelled"));
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    if (title) fd.append("title", title);
+    if (author) fd.append("author", author);
+    xhr.send(fd);
+  });
+}
+
+async function submitUpload() {
+  if (!isLoggedIn()) {
+    requireLoginForUpload();
+    return;
+  }
+  if (!account.uploadFile || account.uploading) return;
+  account.uploading = true;
+  if (el.uploadSubmit) el.uploadSubmit.disabled = true;
+  el.uploadSubmitSpinner?.classList.remove("is-hidden");
+  el.uploadProgressWrap?.classList.remove("is-hidden");
+  setUploadProgress(0, "Starting upload…");
+  showUploadError("");
+  try {
+    const title = (el.uploadTitle?.value || "").trim();
+    const author = (el.uploadAuthor?.value || "").trim();
+    const result = await uploadBookWithProgress(
+      account.uploadFile,
+      title,
+      author,
+      (pct) => setUploadProgress(pct, pct < 100 ? "Uploading…" : "Processing…")
+    );
+    setUploadProgress(100, result?.deduped ? "Already in library" : "Upload complete");
+    const book = result?.book || result;
+    toast(
+      result?.deduped
+        ? `"${book?.title || "Book"}" was already in the library`
+        : `"${book?.title || "Book"}" uploaded — refresh catalog to see it`
+    );
+    setTimeout(() => {
+      account.uploading = false;
+      closeUploadModal();
+      if (state.libTab === "catalog") loadCatalogInitial().catch(() => {});
+    }, 650);
+  } catch (err) {
+    account.uploading = false;
+    if (el.uploadSubmit) el.uploadSubmit.disabled = false;
+    el.uploadSubmitSpinner?.classList.add("is-hidden");
+    if (err.status === 401) {
+      clearAccountSession();
+      showUploadError("Session expired — please sign in again.");
+      setTimeout(() => {
+        closeUploadModal();
+        openAccountModal();
+      }, 800);
+      return;
+    }
+    showUploadError(err.message || "Upload failed");
+  }
+}
+
+function wireAccountUI() {
+  updateAccountChrome();
+  el.btnAccount?.addEventListener("click", () => openAccountModal());
+  el.accountModalClose?.addEventListener("click", () => closeAccountModal());
+  el.accountModal?.addEventListener("click", (e) => {
+    if (e.target === el.accountModal) closeAccountModal();
+  });
+  el.accountTabLogin?.addEventListener("click", () => setAccountMode("login"));
+  el.accountTabRegister?.addEventListener("click", () => setAccountMode("register"));
+  el.accountForm?.addEventListener("submit", submitAccountForm);
+  el.btnAccountLogout?.addEventListener("click", logoutAccount);
+  el.btnAccountUpload?.addEventListener("click", () => openUploadModal());
+  el.btnCatalogUpload?.addEventListener("click", () => openUploadModal());
+
+  el.uploadModalClose?.addEventListener("click", () => closeUploadModal());
+  el.uploadCancel?.addEventListener("click", () => closeUploadModal());
+  el.uploadModal?.addEventListener("click", (e) => {
+    if (e.target === el.uploadModal && !account.uploading) closeUploadModal();
+  });
+  el.uploadDrop?.addEventListener("click", () => el.uploadFile?.click());
+  el.uploadDrop?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      el.uploadFile?.click();
+    }
+  });
+  el.uploadFile?.addEventListener("change", () => {
+    const f = el.uploadFile.files && el.uploadFile.files[0];
+    if (f) setUploadFile(f);
+  });
+  ["dragenter", "dragover"].forEach((ev) => {
+    el.uploadDrop?.addEventListener(ev, (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      el.uploadDrop.classList.add("is-dragover");
+    });
+  });
+  ["dragleave", "drop"].forEach((ev) => {
+    el.uploadDrop?.addEventListener(ev, (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      el.uploadDrop.classList.remove("is-dragover");
+    });
+  });
+  el.uploadDrop?.addEventListener("drop", (e) => {
+    const f = e.dataTransfer?.files && e.dataTransfer.files[0];
+    if (f) setUploadFile(f);
+  });
+  el.uploadSubmit?.addEventListener("click", () => submitUpload());
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    if (!el.uploadModal?.classList.contains("is-hidden") && !account.uploading) {
+      closeUploadModal();
+      return;
+    }
+    if (!el.accountModal?.classList.contains("is-hidden")) closeAccountModal();
+  });
+}
+
 // ─── Events ──────────────────────────────────────────────────
 
 function bindEvents() {
+  wireAccountUI();
   el.tabShelf?.addEventListener("click", () => switchLibTab("shelf"));
   el.tabCatalog?.addEventListener("click", () => switchLibTab("catalog"));
   el.btnCatalogSettings?.addEventListener("click", () => {
@@ -2751,8 +3223,11 @@ async function boot() {
   applyGuideUI();
   buildFontChips();
   bindEvents();
+  updateAccountChrome();
   el.version.textContent = "Folio";
 
+  // Account API works without native bridge (desktop WebView + Android).
+  // Shelf/OPDS still need the host bridge when available.
   if (!hasWails()) {
     el.version.textContent = "Folio · browser preview";
     return;
