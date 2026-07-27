@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"image/jpeg"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -66,12 +67,18 @@ type cacheEntry struct {
 // NewRenderer initializes a PDFium worker pool using WebAssembly.
 func NewRenderer() (*Renderer, error) {
 	fs := windowsFriendlyFS()
+	// CRITICAL (Windows GUI / -H windowsgui): os.Stdout and os.Stderr are
+	// invalid handles. go-pdfium defaults to them and wazero then fails with:
+	//   GetFileType /dev/stdout: The handle is invalid
+	// Always use Discard (or a real log file) so the WASM module can start.
 	pool, err := webassembly.Init(webassembly.Config{
 		MinIdle:      1,
 		MaxIdle:      1,
 		MaxTotal:     1,
 		FSConfig:     fs,
 		ReuseWorkers: true,
+		Stdout:       io.Discard,
+		Stderr:       io.Discard,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("pdfium webassembly init: %w", err)
