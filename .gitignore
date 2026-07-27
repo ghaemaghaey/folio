@@ -31,3 +31,7 @@ android/.idea/
 server/data/
 server/folio-server
 server/folio-server.exe
+
+# Local build outputs
+dist/
+
