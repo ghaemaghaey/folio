@@ -1,0 +1,76 @@
+# Combined stack: calibre-web + folio-server (shared library on host /library)
+#
+# Prerequisites:
+#   - Docker network: docker network create finka-network
+#   - Host paths:     /data (calibre-web config), /library (Calibre library)
+#
+# Usage on the Calibre host:
+#   cp .env.example .env   # set JWT_SECRET
+#   docker compose -f docker-compose.calibre.yml --env-file .env pull
+#   docker compose -f docker-compose.calibre.yml --env-file .env up -d
+#
+# GHCR image (published by CI):
+#   ghcr.io/ghaemaghaey/folio-server:latest
+#
+# If the package is private:
+#   echo $GITHUB_TOKEN | docker login ghcr.io -u USERNAME --password-stdin
+
+services:
+  calibre-web:
+    image: linuxserver/calibre-web:latest
+    container_name: calibre-web
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Etc/UTC
+      # Optional: ship calibredb inside calibre-web itself (not required — folio-server has it)
+      # - DOCKER_MODS=linuxserver/mods:universal-calibre
+      - OAUTHLIB_RELAX_TOKEN_SCOPE=1
+    volumes:
+      - /data:/config
+      - /library:/books
+    ports:
+      - "8083:8083"
+    restart: unless-stopped
+    networks:
+      - finka-network
+
+  folio-server:
+    image: ${FOLIO_SERVER_IMAGE:-ghcr.io/ghaemaghaey/folio-server:latest}
+    container_name: folio-server
+    depends_on:
+      - calibre-web
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Etc/UTC
+      - LISTEN_ADDR=:8090
+      - DB_PATH=/data/folio.db
+      - JWT_SECRET=${JWT_SECRET:?set JWT_SECRET}
+      # Same library tree calibre-web uses (host /library → container /library)
+      - CALIBRE_LIBRARY_PATH=/library
+      - CALIBREDB_BIN=calibredb
+    volumes:
+      # SQLite + any folio-server state
+      - folio_server_data:/data
+      # MUST match calibre-web's books volume (host /library)
+      - /library:/library
+    ports:
+      - "${FOLIO_SERVER_PORT:-8090}:8090"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8090/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    networks:
+      - finka-network
+
+volumes:
+  folio_server_data:
+
+networks:
+  finka-network:
+    driver: bridge
+    external: true
