@@ -163,6 +163,16 @@ async function folioApi(path, { method = "GET", body, token, formData } = {}) {
 
 // ── Cloud progress sync (fire-and-forget) ──────────────────────────────
 
+/** Detect device name for per-device progress tracking. */
+function getDeviceName() {
+  if (typeof navigator !== "undefined") {
+    const ua = navigator.userAgent || "";
+    if (/Android/i.test(ua)) return "Android";
+    if (/iPhone|iPad|iPod/i.test(ua)) return "iOS";
+  }
+  return "Desktop";
+}
+
 /** Serialize reading position to a compact JSON string for the server. */
 function serializePosition(page, chapter, subPage, scroll) {
   return JSON.stringify({ p: page | 0, c: chapter | 0, s: subPage | 0, sc: scroll || 0 });
@@ -185,12 +195,26 @@ function deserializePosition(posStr) {
  */
 async function syncProgressToServer(fingerprint, page, chapter, subPage, scroll) {
   if (!isLoggedIn() || !fingerprint) return;
+  const pos = serializePosition(page, chapter, subPage, scroll);
+  const device = getDeviceName();
   try {
     await folioApi("/progress", {
       method: "POST",
-      body: { fingerprint, position: serializePosition(page, chapter, subPage, scroll) },
+      body: { fingerprint, position: pos, device },
     });
-  } catch (_) { /* silent — server may be unreachable */ }
+  } catch (_) { /* best-effort, silent */ }
+}
+
+/**
+ * Fetch all device positions for a book. Returns array of {device, position, updated_at}.
+ * Returns empty array on any error.
+ */
+async function fetchAllDeviceProgress(fingerprint) {
+  if (!isLoggedIn() || !fingerprint) return [];
+  try {
+    const data = await folioApi(`/progress/${encodeURIComponent(fingerprint)}/devices`);
+    return Array.isArray(data) ? data : [];
+  } catch { return []; }
 }
 
 /**
@@ -201,7 +225,7 @@ async function fetchProgressFromServer(fingerprint) {
   if (!isLoggedIn() || !fingerprint) return null;
   try {
     const data = await folioApi(`/progress/${encodeURIComponent(fingerprint)}`);
-    return data; // { fingerprint, position, updated_at }
+    return data; // { fingerprint, device, position, updated_at }
   } catch { return null; }
 }
 
@@ -1314,13 +1338,29 @@ async function openBookId(id) {
         }
       }
     } catch (_) {}
-    // Cloud sync: check if server has a newer position (cross-device).
+    // Cloud sync: check if server has positions from multiple devices.
     const fp = doc.fingerprint || doc.Fingerprint || "";
-    const serverProg = await fetchProgressFromServer(fp);
-    if (serverProg) {
-      const sp = deserializePosition(serverProg.position);
-      if (sp) {
-        // Server wins on open — this is how cross-device sync works.
+    const devices = await fetchAllDeviceProgress(fp);
+    if (devices.length > 0) {
+      // Parse each device position
+      const parsed = devices.map((d) => {
+        const sp = deserializePosition(d.position);
+        return { device: d.device || "?", pos: sp, updated: d.updated_at || "" };
+      }).filter((d) => d.pos);
+      // Check if devices disagree on position
+      const unique = new Set(parsed.map((d) => d.pos.p));
+      if (parsed.length > 1 && unique.size > 1) {
+        // Show device picker popup
+        const chosen = await showDevicePickerPopup(parsed, doc.title || "this book");
+        if (chosen && chosen.pos) {
+          savedPage = chosen.pos.p ?? savedPage;
+          savedChapter = chosen.pos.c ?? savedChapter;
+          savedSubPage = chosen.pos.s ?? savedSubPage;
+          savedScroll = chosen.pos.sc ?? savedScroll;
+        }
+      } else if (parsed.length === 1) {
+        // Single device — use its position directly
+        const sp = parsed[0].pos;
         savedPage = sp.p ?? savedPage;
         savedChapter = sp.c ?? savedChapter;
         savedSubPage = sp.s ?? savedSubPage;
@@ -1338,6 +1378,62 @@ async function openBookId(id) {
     toast(String(err?.message || err || "Open failed"), true);
     refreshShelf();
   }
+}
+
+/**
+ * Show a popup letting the user choose which device's reading position to restore.
+ * Returns the chosen entry {device, pos, updated} or null if cancelled.
+ */
+function showDevicePickerPopup(devices, bookTitle) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "device-picker-overlay";
+    const box = document.createElement("div");
+    box.className = "device-picker";
+    const icons = { Desktop: "\uD83D\uDDA5\uFE0F", Android: "\uD83D\uDCF1", iOS: "\uD83D\uDCF1" };
+    let html = `<h3 class="device-picker-title">Continue reading</h3>`;
+    html += `<p class="device-picker-sub">${escapeHtml(bookTitle)}</p>`;
+    for (const d of devices) {
+      const icon = icons[d.device] || "\uD83D\uDCBB";
+      const pg = (d.pos.p || 0) + 1;
+      const timeAgo = d.updated ? timeAgoStr(d.updated) : "";
+      html += `<button class="device-picker-btn" data-device="${escapeHtml(d.device)}">` +
+        `<span class="device-picker-icon">${icon}</span>` +
+        `<span class="device-picker-name">${escapeHtml(d.device)}</span>` +
+        `<span class="device-picker-page">Page ${pg}</span>` +
+        `<span class="device-picker-time">${timeAgo}</span>` +
+        `</button>`;
+    }
+    html += `<button class="device-picker-btn device-picker-cancel">Cancel</button>`;
+    box.innerHTML = html;
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    overlay.addEventListener("click", (e) => {
+      const btn = e.target.closest(".device-picker-btn");
+      if (!btn) return;
+      if (btn.classList.contains("device-picker-cancel")) {
+        overlay.remove();
+        resolve(null);
+        return;
+      }
+      const devName = btn.dataset.device;
+      const chosen = devices.find((d) => d.device === devName);
+      overlay.remove();
+      resolve(chosen || null);
+    });
+  });
+}
+
+/** Simple time-ago string from a datetime string. */
+function timeAgoStr(dateStr) {
+  try {
+    const d = new Date(dateStr.replace(" ", "T") + "Z");
+    const diff = (Date.now() - d.getTime()) / 1000;
+    if (diff < 60) return "just now";
+    if (diff < 3600) return Math.floor(diff / 60) + "m ago";
+    if (diff < 86400) return Math.floor(diff / 3600) + "h ago";
+    return Math.floor(diff / 86400) + "d ago";
+  } catch { return ""; }
 }
 async function openFile() {
   if (!hasWails()) {

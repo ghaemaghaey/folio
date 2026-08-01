@@ -185,12 +185,13 @@ function deserializePosition(posStr) {
  */
 async function syncProgressToServer(fingerprint, page, chapter, subPage, scroll) {
   if (!isLoggedIn() || !fingerprint) return;
+  const pos = serializePosition(page, chapter, subPage, scroll);
   try {
     await folioApi("/progress", {
       method: "POST",
-      body: { fingerprint, position: serializePosition(page, chapter, subPage, scroll) },
+      body: { fingerprint, position: pos, device: "Android" },
     });
-  } catch (_) { /* silent — server may be unreachable */ }
+  } catch (_) { /* best-effort, silent */ }
 }
 
 /**
@@ -201,7 +202,7 @@ async function fetchProgressFromServer(fingerprint) {
   if (!isLoggedIn() || !fingerprint) return null;
   try {
     const data = await folioApi(`/progress/${encodeURIComponent(fingerprint)}`);
-    return data; // { fingerprint, position, updated_at }
+    return data; // { fingerprint, device, position, updated_at }
   } catch { return null; }
 }
 

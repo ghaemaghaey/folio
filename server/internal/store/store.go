@@ -135,8 +135,9 @@ func (s *Store) InsertBook(b models.Book) (models.Book, error) {
 
 // --- Reading positions ---
 
-func (s *Store) UpsertProgress(userID int64, fingerprint, position string) (models.ReadingPosition, error) {
+func (s *Store) UpsertProgress(userID int64, fingerprint, device, position string) (models.ReadingPosition, error) {
 	fingerprint = strings.TrimSpace(fingerprint)
+	device = strings.TrimSpace(device)
 	position = strings.TrimSpace(position)
 	if userID == 0 || fingerprint == "" || position == "" {
 		return models.ReadingPosition{}, ErrInvalidInput
@@ -160,26 +161,65 @@ func (s *Store) UpsertProgress(userID int64, fingerprint, position string) (mode
 
 	now := time.Now().UTC().Format("2006-01-02 15:04:05")
 	_, err = s.db.Exec(
-		`INSERT INTO reading_positions (user_id, book_fingerprint, position, updated_at)
-		 VALUES (?, ?, ?, ?)
-		 ON CONFLICT(user_id, book_fingerprint) DO UPDATE SET
+		`INSERT INTO reading_positions (user_id, book_fingerprint, device, position, updated_at)
+		 VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(user_id, book_fingerprint, device) DO UPDATE SET
 		   position = excluded.position,
 		   updated_at = excluded.updated_at`,
-		userID, fingerprint, position, now,
+		userID, fingerprint, device, position, now,
 	)
 	if err != nil {
 		return models.ReadingPosition{}, err
 	}
-	return s.GetProgress(userID, fingerprint)
+	return s.GetProgressForDevice(userID, fingerprint, device)
+}
+
+func (s *Store) GetProgressForDevice(userID int64, fingerprint, device string) (models.ReadingPosition, error) {
+	var p models.ReadingPosition
+	err := s.db.QueryRow(
+		`SELECT user_id, book_fingerprint, COALESCE(device,''), position, COALESCE(updated_at,'')
+		 FROM reading_positions WHERE user_id = ? AND book_fingerprint = ? AND device = ?`,
+		userID, fingerprint, device,
+	).Scan(&p.UserID, &p.BookFingerprint, &p.Device, &p.Position, &p.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return models.ReadingPosition{}, ErrNotFound
+	}
+	return p, err
+}
+
+// GetProgressDevices returns all device positions for a user+book.
+func (s *Store) GetProgressDevices(userID int64, fingerprint string) ([]models.ReadingPosition, error) {
+	rows, err := s.db.Query(
+		`SELECT user_id, book_fingerprint, COALESCE(device,''), position, COALESCE(updated_at,'')
+		 FROM reading_positions WHERE user_id = ? AND book_fingerprint = ? ORDER BY updated_at DESC`,
+		userID, fingerprint,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.ReadingPosition
+	for rows.Next() {
+		var p models.ReadingPosition
+		if err := rows.Scan(&p.UserID, &p.BookFingerprint, &p.Device, &p.Position, &p.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	if out == nil {
+		out = []models.ReadingPosition{}
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) GetProgress(userID int64, fingerprint string) (models.ReadingPosition, error) {
 	var p models.ReadingPosition
 	err := s.db.QueryRow(
-		`SELECT user_id, book_fingerprint, position, COALESCE(updated_at,'')
-		 FROM reading_positions WHERE user_id = ? AND book_fingerprint = ?`,
+		`SELECT user_id, book_fingerprint, COALESCE(device,''), position, COALESCE(updated_at,'')
+		 FROM reading_positions WHERE user_id = ? AND book_fingerprint = ?
+		 ORDER BY updated_at DESC LIMIT 1`,
 		userID, fingerprint,
-	).Scan(&p.UserID, &p.BookFingerprint, &p.Position, &p.UpdatedAt)
+	).Scan(&p.UserID, &p.BookFingerprint, &p.Device, &p.Position, &p.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return models.ReadingPosition{}, ErrNotFound
 	}
@@ -188,7 +228,7 @@ func (s *Store) GetProgress(userID int64, fingerprint string) (models.ReadingPos
 
 func (s *Store) ListProgress(userID int64) ([]models.ReadingPosition, error) {
 	rows, err := s.db.Query(
-		`SELECT user_id, book_fingerprint, position, COALESCE(updated_at,'')
+		`SELECT user_id, book_fingerprint, COALESCE(device,''), position, COALESCE(updated_at,'')
 		 FROM reading_positions WHERE user_id = ? ORDER BY updated_at DESC`,
 		userID,
 	)
@@ -199,7 +239,7 @@ func (s *Store) ListProgress(userID int64) ([]models.ReadingPosition, error) {
 	var out []models.ReadingPosition
 	for rows.Next() {
 		var p models.ReadingPosition
-		if err := rows.Scan(&p.UserID, &p.BookFingerprint, &p.Position, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.UserID, &p.BookFingerprint, &p.Device, &p.Position, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, p)

@@ -59,6 +59,7 @@ func (s *Server) Routes(r chi.Router) {
 		pr.Post("/progress", s.handleUpsertProgress)
 		pr.Get("/progress", s.handleListProgress)
 		pr.Get("/progress/{fingerprint}", s.handleGetProgress)
+		pr.Get("/progress/{fingerprint}/devices", s.handleGetProgressDevices)
 	})
 }
 
@@ -270,7 +271,7 @@ func (s *Server) handleUpsertProgress(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
-	p, err := s.store.UpsertProgress(userID, req.Fingerprint, req.Position)
+	p, err := s.store.UpsertProgress(userID, req.Fingerprint, req.Device, req.Position)
 	if errors.Is(err, store.ErrInvalidInput) {
 		writeError(w, http.StatusBadRequest, "fingerprint and position are required")
 		return
@@ -305,4 +306,15 @@ func (s *Server) handleGetProgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, p)
+}
+
+func (s *Server) handleGetProgressDevices(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	fp := chi.URLParam(r, "fingerprint")
+	list, err := s.store.GetProgressDevices(userID, fp)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
 }

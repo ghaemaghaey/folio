@@ -56,13 +56,15 @@ CREATE TABLE IF NOT EXISTS books (
 CREATE TABLE IF NOT EXISTS reading_positions (
     user_id INTEGER REFERENCES users(id),
     book_fingerprint TEXT REFERENCES books(fingerprint),
+    device TEXT NOT NULL DEFAULT '',
     position TEXT NOT NULL,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (user_id, book_fingerprint)
+    PRIMARY KEY (user_id, book_fingerprint, device)
 );
 
 CREATE INDEX IF NOT EXISTS idx_books_uploaded_by ON books(uploaded_by);
 CREATE INDEX IF NOT EXISTS idx_positions_user ON reading_positions(user_id);
+CREATE INDEX IF NOT EXISTS idx_positions_user_fp ON reading_positions(user_id, book_fingerprint);
 `
 	_, err := db.Exec(schema)
 	return err

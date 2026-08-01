@@ -213,9 +213,23 @@ class OpdsClient(
         }
 
         fun parseFeed(data: ByteArray): OpdsFeed {
+            // Calibre-Web embeds raw HTML (<div>, <p>, etc.) inside <summary>
+            // and <content> elements. XmlPullParser chokes on unclosed tags.
+            // Wrap those elements' inner content in CDATA so the parser treats
+            // them as opaque text.
+            val xmlStr = String(data, Charsets.UTF_8)
+            val safeXml = xmlStr.replace(
+                Regex("""(<(?:summary|content)[^>]*>)\s*([\s\S]*?)(\s*</(?:summary|content)>)"""),
+            ) { m ->
+                val inner = m.groupValues[2]
+                if (inner.contains("<![CDATA[")) m.value
+                else "${m.groupValues[1]}<![CDATA[$inner]]>${m.groupValues[3]}"
+            }
+            val safeData = safeXml.toByteArray(Charsets.UTF_8)
+
             val parser = Xml.newPullParser()
             parser.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, true)
-            parser.setInput(ByteArrayInputStream(data), "UTF-8")
+            parser.setInput(ByteArrayInputStream(safeData), "UTF-8")
 
             var title = ""
             var nextURL = ""

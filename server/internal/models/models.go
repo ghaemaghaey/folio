@@ -23,6 +23,7 @@ type Book struct {
 type ReadingPosition struct {
 	UserID          int64  `json:"user_id"`
 	BookFingerprint string `json:"fingerprint"`
+	Device          string `json:"device"`
 	Position        string `json:"position"`
 	UpdatedAt       string `json:"updated_at,omitempty"`
 }
@@ -44,4 +45,5 @@ type AuthResponse struct {
 type ProgressRequest struct {
 	Fingerprint string `json:"fingerprint"`
 	Position    string `json:"position"`
+	Device      string `json:"device"`
 }
