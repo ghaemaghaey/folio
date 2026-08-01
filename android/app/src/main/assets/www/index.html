@@ -53,7 +53,9 @@
               <h1 class="brand-name">Folio</h1>
               <p class="brand-tagline">Your calm bookshelf</p>
             </div>
+            <span class="offline-dot" id="offline-dot" title="Online"></span>
           </div>
+          <div class="offline-banner is-hidden" id="offline-banner"></div>
           <div class="lib-actions">
             <div class="lib-tabs" role="tablist" aria-label="Library sections">
               <button type="button" class="lib-tab is-active" id="tab-shelf" role="tab" aria-selected="true">
@@ -122,12 +124,11 @@
               <button type="button" class="btn btn--ghost" id="btn-catalog-settings" title="OPDS server">
                 Settings
               </button>
-              <button type="button" class="btn btn--ghost" id="btn-catalog-upload" title="Upload a book to the shared library">
+              <button type="button" class="icon-btn" id="btn-catalog-upload" title="Upload a book to the shared library">
                 <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M12 16V5M12 5l-4 4M12 5l4 4" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" />
                   <path d="M5 19h14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" />
                 </svg>
-                <span class="btn-label">Upload</span>
               </button>
               <button type="button" class="btn btn--primary" id="btn-catalog-refresh" title="Reload catalog">
                 Refresh
@@ -209,12 +210,11 @@
             <p class="reader-meta" id="reader-meta">Page 1 of 1</p>
           </div>
           <div class="reader-top-actions">
-            <button type="button" class="btn btn--ghost btn--reader-upload is-hidden" id="btn-reader-upload" title="Upload this book to the shared library">
+            <button type="button" class="icon-btn is-hidden" id="btn-reader-upload" title="Upload this book to the shared library">
               <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M12 16V5M12 5l-4 4M12 5l4 4" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" />
                 <path d="M5 19h14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" />
               </svg>
-              <span class="btn-label">Upload</span>
             </button>
             <button type="button" class="icon-btn is-hidden" id="btn-toc" title="Chapters" aria-label="Chapters">
               <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -227,14 +227,7 @@
                 <path d="M9 8h6M9 12h6M9 16h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
               </svg>
             </button>
-            <button type="button" class="icon-btn" id="btn-zoom-out" title="Zoom out" aria-label="Zoom out">
-              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-                <circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="1.75" />
-                <path d="M16 16l4 4M8.5 11h5" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" />
-              </svg>
-            </button>
-            <span class="zoom-label" id="zoom-label">100%</span>
-            <button type="button" class="icon-btn" id="btn-zoom-in" title="Zoom in" aria-label="Zoom in">
+            <button type="button" class="icon-btn" id="btn-zoom" title="Zoom" aria-label="Zoom">
               <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
                 <circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="1.75" />
                 <path d="M16 16l4 4M11 8.5v5M8.5 11h5" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" />
@@ -308,6 +301,26 @@
           <div class="font-group">
             <p class="font-group-label">پارسی — Saber Rastikerdar</p>
             <div class="font-chips" id="font-chips-fa"></div>
+          </div>
+        </div>
+
+        <!-- Zoom popover -->
+        <div class="font-panel is-hidden" id="zoom-panel" role="dialog" aria-label="Zoom controls">
+          <p class="font-panel-title">Zoom</p>
+          <div class="zoom-popup-controls">
+            <button type="button" class="icon-btn" id="btn-zoom-out" title="Zoom out" aria-label="Zoom out">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="1.75" />
+                <path d="M16 16l4 4M8.5 11h5" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" />
+              </svg>
+            </button>
+            <span class="zoom-popup-label" id="zoom-label">100%</span>
+            <button type="button" class="icon-btn" id="btn-zoom-in" title="Zoom in" aria-label="Zoom in">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="1.75" />
+                <path d="M16 16l4 4M11 8.5v5M8.5 11h5" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" />
+              </svg>
+            </button>
           </div>
         </div>
 

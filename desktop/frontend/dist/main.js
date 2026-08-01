@@ -161,7 +161,7 @@ async function folioApi(path, { method = "GET", body, token, formData } = {}) {
   return data;
 }
 
-// ── Cloud progress sync (fire-and-forget) ──────────────────────────────
+// ── Cloud progress sync (with offline queue) ─────────────────────────
 
 /** Detect device name for per-device progress tracking. */
 function getDeviceName() {
@@ -188,26 +188,72 @@ function deserializePosition(posStr) {
   } catch { return null; }
 }
 
+// ── Offline sync queue ──────────────────────────────────────────────
+
+const SYNC_QUEUE_KEY = "folio.pendingSyncs";
+const SYNC_QUEUE_MAX = 200;
+
+function loadPendingSyncs() {
+  try { return JSON.parse(localStorage.getItem(SYNC_QUEUE_KEY)) || []; }
+  catch { return []; }
+}
+
+function savePendingSyncs(queue) {
+  // FIFO eviction
+  while (queue.length > SYNC_QUEUE_MAX) queue.shift();
+  localStorage.setItem(SYNC_QUEUE_KEY, JSON.stringify(queue));
+}
+
+function queueSync(fingerprint, position, device) {
+  const queue = loadPendingSyncs();
+  // Deduplicate: keep only the newest entry per fingerprint+device
+  const key = fingerprint + "|" + device;
+  const filtered = queue.filter(e => (e.fingerprint + "|" + e.device) !== key);
+  filtered.push({ fingerprint, position, device, timestamp: Date.now() });
+  savePendingSyncs(filtered);
+  updateOfflineIndicator();
+}
+
+async function drainSyncQueue() {
+  const queue = loadPendingSyncs();
+  if (!queue.length || !isLoggedIn()) return;
+  const remaining = [];
+  let synced = 0;
+  for (const entry of queue) {
+    try {
+      await folioApi("/progress", {
+        method: "POST",
+        body: { fingerprint: entry.fingerprint, position: entry.position, device: entry.device },
+      });
+      synced++;
+    } catch {
+      remaining.push(entry);
+    }
+  }
+  savePendingSyncs(remaining);
+  if (synced > 0) {
+    toast(`Synced ${synced} position${synced > 1 ? "s" : ""}`);
+    updateOfflineIndicator();
+  }
+}
+
 /**
- * Push current reading position to folio-server (best-effort, silent on error).
- * Called alongside the local SaveBookProgress so the server always has the
- * latest position when the user is logged in.
+ * Push current reading position to folio-server.
+ * On network failure, queues the sync for later retry.
  */
 async function syncProgressToServer(fingerprint, page, chapter, subPage, scroll) {
-  if (!isLoggedIn() || !fingerprint) {
-    console.log("[sync] skipped: loggedIn=" + isLoggedIn() + " fp=" + fingerprint);
-    return;
-  }
+  if (!isLoggedIn() || !fingerprint) return;
   const pos = serializePosition(page, chapter, subPage, scroll);
   const device = getDeviceName();
-  console.log("[sync] POST fp=" + fingerprint + " device=" + device + " pos=" + pos + " api=" + FOLIO_API_BASE);
   try {
     await folioApi("/progress", {
       method: "POST",
       body: { fingerprint, position: pos, device },
     });
-    console.log("[sync] POST ok");
-  } catch (e) { console.warn("[sync] POST failed:", e.message, e.status); }
+  } catch (e) {
+    // Queue for retry when back online
+    queueSync(fingerprint, pos, device);
+  }
 }
 
 /**
@@ -841,6 +887,8 @@ async function loadCatalogInitial() {
     const page = await api().OPDSOpenLibrary();
     if (seq !== state.catalog.searchSeq) return;
     appendCatalogPage(page);
+    // Cache successful catalog for offline use
+    saveCatalogCache(state.catalog.books);
     setCatalogStatus("");
     if (el.catalogSub) {
       const n = state.catalog.books.filter((b) => !b.isNavigation).length;
@@ -854,8 +902,11 @@ async function loadCatalogInitial() {
   } catch (err) {
     if (seq !== state.catalog.searchSeq) return;
     console.error(err);
-    setCatalogStatus(String(err?.message || err || "Could not load catalog"), true);
-    el.catalogEmpty?.classList.remove("is-hidden");
+    // Fall back to cached catalog if network fails
+    if (!showCachedCatalog()) {
+      setCatalogStatus(String(err?.message || err || "Could not load catalog"), true);
+      el.catalogEmpty?.classList.remove("is-hidden");
+    }
   } finally {
     if (seq === state.catalog.searchSeq) {
       state.catalog.loading = false;
@@ -3568,6 +3619,7 @@ async function boot() {
   buildFontChips();
   bindEvents();
   updateAccountChrome();
+  updateOfflineIndicator();
   el.version.textContent = "Folio";
 
   // Account API works without native bridge (desktop WebView + Android).
@@ -3599,11 +3651,17 @@ async function boot() {
         await refreshShelf();
       } catch (_) {}
       setTimeout(() => refreshShelf().catch(() => {}), 600);
+      // Drain pending syncs/uploads when coming online
+      if (navigator.onLine) {
+        drainSyncQueue().catch(() => {});
+        drainUploadQueue().catch(() => {});
+      }
     }, 0);
   });
 }
 
 // Sync to server on page close (best-effort, non-blocking).
+// Also queues to localStorage if offline.
 window.addEventListener("beforeunload", () => {
   if (state.doc && isLoggedIn() && state.doc.fingerprint) {
     let page = 0, chapter = 0, sub = 0, scroll = 0;
@@ -3618,10 +3676,136 @@ window.addEventListener("beforeunload", () => {
     }
     const pos = serializePosition(page, chapter, sub, scroll);
     const device = getDeviceName();
-    // Use sendBeacon for reliable delivery during page unload.
-    const blob = new Blob([JSON.stringify({ fingerprint: state.doc.fingerprint, position: pos, device })], { type: "application/json" });
-    navigator.sendBeacon(`${FOLIO_API_BASE}/progress`, blob);
+    // Queue for retry if offline; otherwise send beacon
+    if (!navigator.onLine) {
+      queueSync(state.doc.fingerprint, pos, device);
+    } else {
+      const blob = new Blob([JSON.stringify({ fingerprint: state.doc.fingerprint, position: pos, device })], { type: "application/json" });
+      navigator.sendBeacon(`${FOLIO_API_BASE}/progress`, blob);
+    }
   }
+});
+
+// ── OPDS catalog cache ──────────────────────────────────────────────
+
+const CATALOG_CACHE_KEY = "folio.catalogCache";
+const CATALOG_CACHE_MAX = 500;
+
+function loadCatalogCache() {
+  try { return JSON.parse(localStorage.getItem(CATALOG_CACHE_KEY)); }
+  catch { return null; }
+}
+
+function saveCatalogCache(books) {
+  const cache = { books: books.slice(0, CATALOG_CACHE_MAX), timestamp: Date.now(), opdsUrl: state.settings?.opdsUrl || "" };
+  localStorage.setItem(CATALOG_CACHE_KEY, JSON.stringify(cache));
+}
+
+function showCachedCatalog() {
+  const cache = loadCatalogCache();
+  if (!cache?.books?.length) return false;
+  state.catalog.books = [];
+  state.catalog.nextURL = "";
+  el.catalogGrid && (el.catalogGrid.innerHTML = "");
+  for (const b of cache.books) {
+    state.catalog.books.push(b);
+    renderCatalogCard(b);
+  }
+  setCatalogStatus("Offline — showing cached catalog", true);
+  if (el.catalogSub) el.catalogSub.textContent = `Cached · ${cache.books.length} books`;
+  return true;
+}
+
+// ── Upload queue (file path only) ───────────────────────────────────
+
+const UPLOAD_QUEUE_KEY = "folio.pendingUploads";
+
+function loadPendingUploads() {
+  try { return JSON.parse(localStorage.getItem(UPLOAD_QUEUE_KEY)) || []; }
+  catch { return []; }
+}
+
+function savePendingUploads(queue) {
+  localStorage.setItem(UPLOAD_QUEUE_KEY, JSON.stringify(queue));
+}
+
+function queueUpload(filePath, title, author) {
+  const queue = loadPendingUploads();
+  queue.push({ filePath, title, author, timestamp: Date.now() });
+  savePendingUploads(queue);
+  updateOfflineIndicator();
+}
+
+async function drainUploadQueue() {
+  const queue = loadPendingUploads();
+  if (!queue.length || !isLoggedIn() || !hasWails()) return;
+  const remaining = [];
+  let uploaded = 0;
+  for (const entry of queue) {
+    try {
+      if (typeof api().UploadLocalFile === "function") {
+        await api().UploadLocalFile(FOLIO_API_BASE, account.token, entry.filePath, entry.title || "", entry.author || "");
+        uploaded++;
+      } else {
+        remaining.push(entry);
+      }
+    } catch {
+      remaining.push(entry);
+    }
+  }
+  savePendingUploads(remaining);
+  if (uploaded > 0) {
+    toast(`Uploaded ${uploaded} book${uploaded > 1 ? "s" : ""}`);
+    updateOfflineIndicator();
+  }
+}
+
+// ── Offline status indicator ─────────────────────────────────────────
+
+function updateOfflineIndicator() {
+  const dot = document.getElementById("offline-dot");
+  const banner = document.getElementById("offline-banner");
+  const pendingBadge = document.getElementById("pending-uploads-badge");
+  const isOnline = navigator.onLine;
+  if (dot) {
+    dot.classList.toggle("is-offline", !isOnline);
+    dot.title = isOnline ? "Online" : "Offline";
+  }
+  if (banner) {
+    const syncCount = loadPendingSyncs().length;
+    const uploadCount = loadPendingUploads().length;
+    if (!isOnline || syncCount + uploadCount > 0) {
+      banner.classList.remove("is-hidden");
+      if (!isOnline) {
+        banner.textContent = "You're offline — changes will sync when reconnected";
+      } else {
+        banner.textContent = `Syncing ${syncCount + uploadCount} pending item${syncCount + uploadCount > 1 ? "s" : ""}…`;
+      }
+    } else {
+      banner.classList.add("is-hidden");
+    }
+  }
+  if (pendingBadge) {
+    const count = loadPendingUploads().length;
+    if (count > 0) {
+      pendingBadge.textContent = count;
+      pendingBadge.classList.remove("is-hidden");
+    } else {
+      pendingBadge.classList.add("is-hidden");
+    }
+  }
+}
+
+// ── Online/offline event listeners ──────────────────────────────────
+
+window.addEventListener("online", () => {
+  updateOfflineIndicator();
+  drainSyncQueue();
+  drainUploadQueue();
+});
+
+window.addEventListener("offline", () => {
+  updateOfflineIndicator();
 });
 
 document.addEventListener("DOMContentLoaded", boot);
