@@ -183,7 +183,7 @@ func (a *App) shutdown(ctx context.Context) {
 
 // AppVersion returns the app version string.
 func (a *App) AppVersion() string {
-	return "0.6.7"
+	return "0.7.0"
 }
 
 // OpenExternalURL opens http(s)/mailto links in the OS default browser.
