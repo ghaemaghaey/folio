@@ -2237,7 +2237,9 @@ function softBreakLongUrls(root) {
       )
       .replace(/([^\s]{24})(?!\u200B)/g, `$1${ZWSP}`);
 
-  root.querySelectorAll("a").forEach((a) => {
+  // Only style actual links (a[href]) — anchor-only <a> tags (no href) are
+  // used by many EPUBs for positioning and must not get link word-break styles.
+  root.querySelectorAll("a[href]").forEach((a) => {
     a.style.wordBreak = "break-all";
     a.style.overflowWrap = "anywhere";
     a.style.whiteSpace = "normal";
