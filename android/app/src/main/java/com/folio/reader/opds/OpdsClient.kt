@@ -212,19 +212,56 @@ class OpdsClient(
             }
         }
 
-        fun parseFeed(data: ByteArray): OpdsFeed {
-            // Calibre-Web embeds raw HTML (<div>, <p>, etc.) inside <summary>
-            // and <content> elements. XmlPullParser chokes on unclosed tags.
-            // Wrap those elements' inner content in CDATA so the parser treats
-            // them as opaque text.
-            val xmlStr = String(data, Charsets.UTF_8)
-            val safeXml = xmlStr.replace(
-                Regex("""(<(?:summary|content)[^>]*>)\s*([\s\S]*?)(\s*</(?:summary|content)>)"""),
-            ) { m ->
-                val inner = m.groupValues[2]
-                if (inner.contains("<![CDATA[")) m.value
-                else "${m.groupValues[1]}<![CDATA[$inner]]>${m.groupValues[3]}"
+        /** Strip HTML tags embedded in XML text content, preserving XML structure. */
+        private fun stripEmbeddedHtml(xml: String): String {
+            val sb = StringBuilder(xml.length)
+            var i = 0
+            while (i < xml.length) {
+                if (xml[i] == '<') {
+                    // Find the end of this tag
+                    val end = xml.indexOf('>', i)
+                    if (end < 0) { sb.append(xml.substring(i)); break }
+                    val tagBody = xml.substring(i + 1, end).trim()
+                    // Determine if this is an XML tag or an HTML tag embedded in text.
+                    // XML tags: start with !, ?, a letter, or /+letter; have valid tag names.
+                    // HTML tags in text: appear between XML tags' text content.
+                    val isClosing = tagBody.startsWith('/')
+                    val name = if (isClosing) tagBody.substring(1).trim() else tagBody
+                    val tagName = name.replace(Regex(":.*"), "") // strip namespace prefix
+                        .replace(Regex("\\s.*"), "")            // strip attributes
+                        .lowercase()
+                    // Valid OPDS/XML tag names we want to keep
+                    val xmlTags = setOf(
+                        "feed", "entry", "title", "id", "summary", "content",
+                        "link", "author", "name", "category", "icon", "logo",
+                        "subtitle", "rights", "updated", "published", "generator",
+                        "!doctype", "!doctype html", "?xml"
+                    )
+                    val isXmlTag = tagName in xmlTags ||
+                        (tagBody.startsWith("!--") && tagBody.endsWith("--")) ||
+                        tagBody.startsWith("?")
+                    if (isXmlTag) {
+                        sb.append(xml.substring(i, end + 1))
+                        i = end + 1
+                    } else {
+                        // HTML tag in text content — skip it (strip it)
+                        i = end + 1
+                    }
+                } else {
+                    sb.append(xml[i])
+                    i++
+                }
             }
+            return sb.toString()
+        }
+
+        fun parseFeed(data: ByteArray): OpdsFeed {
+            // Calibre-Web embeds raw HTML (<div>, <p>, etc.) inside XML text
+            // elements. XmlPullParser chokes on unclosed tags.
+            // Strip HTML tags from the raw XML before parsing — OPDS entries
+            // only need titles, links, and plain-text summaries.
+            val xmlStr = String(data, Charsets.UTF_8)
+            val safeXml = stripEmbeddedHtml(xmlStr)
             val safeData = safeXml.toByteArray(Charsets.UTF_8)
 
             val parser = Xml.newPullParser()
