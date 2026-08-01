@@ -783,6 +783,7 @@ class AppFacade(
             pageCount = count,
             pageIndex = lastPage,
             lastScroll = lastScroll,
+            fingerprint = saved.fingerprint,
             status = "ok"
         )
     }
@@ -857,6 +858,7 @@ class AppFacade(
             lastChapter = lastChapter,
             lastSubPage = lastSubPage,
             lastScroll = lastScroll,
+            fingerprint = saved.fingerprint,
             status = "ok"
         )
     }

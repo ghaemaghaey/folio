@@ -58,6 +58,7 @@ type DocumentInfo struct {
 	LastChapter int     `json:"lastChapter"` // EPUB spine index
 	LastSubPage int     `json:"lastSubPage"` // EPUB page within chapter
 	LastScroll  float64 `json:"lastScroll"`
+	Fingerprint string  `json:"fingerprint"` // SHA-256 of first 64 KiB (server sync key)
 	Status      string  `json:"status"`
 }
 
@@ -309,11 +310,12 @@ func (a *App) OpenBook(id string) (*DocumentInfo, error) {
 	for _, it := range items {
 		if it.ID == id && it.Status != library.StatusOK {
 			return &DocumentInfo{
-				ID:     it.ID,
-				Path:   it.Path,
-				Title:  it.Title,
-				Format: string(it.Format),
-				Status: string(it.Status),
+				ID:          it.ID,
+				Path:        it.Path,
+				Title:       it.Title,
+				Format:      string(it.Format),
+				Fingerprint: it.Fingerprint,
+				Status:      string(it.Status),
 			}, fmt.Errorf("book is %s — remap the file first", it.StatusLabel)
 		}
 	}
@@ -576,14 +578,15 @@ func (a *App) openPDF(path string, existingID string) (*DocumentInfo, error) {
 	}
 
 	return &DocumentInfo{
-		ID:         book.ID,
-		Path:       path,
-		Title:      book.Title,
-		Format:     string(library.FormatPDF),
-		PageCount:  count,
-		PageIndex:  lastPage,
-		LastScroll: lastScroll,
-		Status:     "ok",
+		ID:          book.ID,
+		Path:        path,
+		Title:       book.Title,
+		Format:      string(library.FormatPDF),
+		PageCount:   count,
+		PageIndex:   lastPage,
+		LastScroll:  lastScroll,
+		Fingerprint: book.Fingerprint,
+		Status:      "ok",
 	}, nil
 }
 
@@ -686,6 +689,7 @@ func (a *App) openEPUB(path string, existingID string) (*DocumentInfo, error) {
 		LastChapter: lastChapter,
 		LastSubPage: lastSubPage,
 		LastScroll:  lastScroll,
+		Fingerprint: libBook.Fingerprint,
 		Status:      "ok",
 	}, nil
 }

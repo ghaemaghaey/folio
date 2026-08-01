@@ -103,6 +103,7 @@ data class DocumentInfo(
     val lastChapter: Int = 0,
     val lastSubPage: Int = 0,
     val lastScroll: Double = 0.0,
+    val fingerprint: String = "",
     val status: String = "ok"
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
@@ -115,6 +116,7 @@ data class DocumentInfo(
         put("lastChapter", lastChapter)
         put("lastSubPage", lastSubPage)
         put("lastScroll", lastScroll)
+        put("fingerprint", fingerprint)
         put("status", status)
     }
 }

@@ -161,6 +161,50 @@ async function folioApi(path, { method = "GET", body, token, formData } = {}) {
   return data;
 }
 
+// ── Cloud progress sync (fire-and-forget) ──────────────────────────────
+
+/** Serialize reading position to a compact JSON string for the server. */
+function serializePosition(page, chapter, subPage, scroll) {
+  return JSON.stringify({ p: page | 0, c: chapter | 0, s: subPage | 0, sc: scroll || 0 });
+}
+
+/** Deserialize server position string back to numbers. Returns null on error. */
+function deserializePosition(posStr) {
+  if (!posStr) return null;
+  try {
+    const o = JSON.parse(posStr);
+    if (o && typeof o.p === "number") return o;
+    return null;
+  } catch { return null; }
+}
+
+/**
+ * Push current reading position to folio-server (best-effort, silent on error).
+ * Called alongside the local SaveBookProgress so the server always has the
+ * latest position when the user is logged in.
+ */
+async function syncProgressToServer(fingerprint, page, chapter, subPage, scroll) {
+  if (!isLoggedIn() || !fingerprint) return;
+  try {
+    await folioApi("/progress", {
+      method: "POST",
+      body: { fingerprint, position: serializePosition(page, chapter, subPage, scroll) },
+    });
+  } catch (_) { /* silent — server may be unreachable */ }
+}
+
+/**
+ * Fetch the server's stored position for a book (returns null on any error).
+ * Used on book-open to see if another device saved a newer position.
+ */
+async function fetchProgressFromServer(fingerprint) {
+  if (!isLoggedIn() || !fingerprint) return null;
+  try {
+    const data = await folioApi(`/progress/${encodeURIComponent(fingerprint)}`);
+    return data; // { fingerprint, position, updated_at }
+  } catch { return null; }
+}
+
 const $ = (s) => document.querySelector(s);
 const el = {
   library: $("#view-library"),
@@ -589,6 +633,8 @@ async function flushProgress() {
     } else {
       await api().SaveProgress(page, chapter, sub, scroll);
     }
+    // Cloud sync: push to folio-server if logged in (fire-and-forget).
+    syncProgressToServer(state.doc.fingerprint, page, chapter, sub, scroll);
   } catch (err) {
     console.error("SaveProgress failed", err);
   }
@@ -1255,17 +1301,36 @@ async function openBookId(id) {
     // Re-read saved progress from library (source of truth)
     let savedPage = doc.pageIndex ?? doc.PageIndex ?? 0;
     let savedScroll = doc.lastScroll ?? doc.LastScroll ?? 0;
+    let savedChapter = doc.lastChapter ?? doc.LastChapter ?? 0;
+    let savedSubPage = doc.lastSubPage ?? doc.LastSubPage ?? 0;
     try {
       if (typeof api().GetBookProgress === "function") {
         const prog = await api().GetBookProgress(doc.id || doc.ID || id);
         if (prog && (prog.page != null || prog.Page != null)) {
           savedPage = prog.page ?? prog.Page ?? savedPage;
           savedScroll = prog.scroll ?? prog.Scroll ?? savedScroll;
+          savedChapter = prog.chapter ?? prog.Chapter ?? savedChapter;
+          savedSubPage = prog.subPage ?? prog.SubPage ?? savedSubPage;
         }
       }
     } catch (_) {}
+    // Cloud sync: check if server has a newer position (cross-device).
+    const fp = doc.fingerprint || doc.Fingerprint || "";
+    const serverProg = await fetchProgressFromServer(fp);
+    if (serverProg) {
+      const sp = deserializePosition(serverProg.position);
+      if (sp) {
+        // Server wins on open — this is how cross-device sync works.
+        savedPage = sp.p ?? savedPage;
+        savedChapter = sp.c ?? savedChapter;
+        savedSubPage = sp.s ?? savedSubPage;
+        savedScroll = sp.sc ?? savedScroll;
+      }
+    }
     doc.pageIndex = savedPage | 0;
     doc.lastScroll = savedScroll || 0;
+    doc.lastChapter = savedChapter | 0;
+    doc.lastSubPage = savedSubPage | 0;
     await enterDocument(doc);
     hideToast();
   } catch (err) {
