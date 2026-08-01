@@ -12,6 +12,18 @@ This repository is a **monorepo** for the whole Folio stack:
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/ghaemaghaey/folio/actions/workflows/ci.yml/badge.svg)](https://github.com/ghaemaghaey/folio/actions/workflows/ci.yml)
+[![Android](https://img.shields.io/badge/Download-Android-green.svg)](https://github.com/ghaemaghaey/folio/actions/workflows/android.yml)
+
+---
+
+## Downloads
+
+| Platform | Link |
+| --- | --- |
+| **Android** | [Download latest build](https://github.com/ghaemaghaey/folio/actions/workflows/android.yml) — click the newest run, scroll to Artifacts |
+| **Windows** | [Download latest build](https://github.com/ghaemaghaey/folio/actions/workflows/ci.yml) — click the newest run, download `folio-windows-amd64` |
+| **Linux** | [Download latest build](https://github.com/ghaemaghaey/folio/actions/workflows/ci.yml) — click the newest run, download `folio-linux-amd64-debian-trixie` |
+| **Server** | `docker pull ghcr.io/ghaemaghaey/folio-server:latest` |
 
 ---
 
