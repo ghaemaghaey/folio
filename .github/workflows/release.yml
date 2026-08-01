@@ -1,13 +1,12 @@
 name: Release
 
-# Push a version tag to publish Windows + Linux binaries to GitHub Releases:
-#   git tag v0.6.3
-#   git push origin v0.6.3
+# Push a version tag to publish all binaries to a single GitHub Release:
+#   git tag v0.7.0
+#   git push origin v0.7.0
 #
-# Assets:
-#   folio-windows-amd64.exe
-#   folio-linux-amd64                 (Ubuntu 22.04 / broader glibc baseline)
-#   folio-linux-amd64-debian-trixie   (Debian 13 / Trixie — webkit2gtk 4.1)
+# This workflow builds desktop binaries (Windows, Linux, Debian Trixie)
+# and uploads them. Android and CI workflows also upload their artifacts
+# to the same release when triggered by the same tag.
 
 on:
   push:
@@ -16,6 +15,10 @@ on:
 
 permissions:
   contents: write
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
   release:

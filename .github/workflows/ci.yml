@@ -3,8 +3,17 @@ name: CI
 on:
   push:
     branches: [main, master]
+    tags:
+      - "v*"
   pull_request:
     branches: [main, master]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -68,6 +77,16 @@ jobs:
           name: ${{ matrix.artifact }}
           path: desktop/build/bin/folio${{ matrix.ext }}
           if-no-files-found: error
+
+      - name: Upload to GitHub Release (tag pushes only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: desktop/build/bin/folio${{ matrix.ext }}
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-server:
     name: Build (folio-server)
@@ -144,3 +163,13 @@ jobs:
           name: folio-linux-amd64-debian-trixie
           path: desktop/build/bin/folio-linux-amd64-debian-trixie
           if-no-files-found: error
+
+      - name: Upload to GitHub Release (tag pushes only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: desktop/build/bin/folio-linux-amd64-debian-trixie
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
