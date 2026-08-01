@@ -268,9 +268,11 @@ func (s *Server) handleUpsertProgress(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 	var req models.ProgressRequest
 	if err := decodeJSON(r, &req); err != nil {
+		log.Printf("progress POST: bad json from user %d: %v", userID, err)
 		writeError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
+	log.Printf("progress POST: user=%d fp=%s device=%s pos=%s", userID, req.Fingerprint, req.Device, req.Position)
 	p, err := s.store.UpsertProgress(userID, req.Fingerprint, req.Device, req.Position)
 	if errors.Is(err, store.ErrInvalidInput) {
 		writeError(w, http.StatusBadRequest, "fingerprint and position are required")
