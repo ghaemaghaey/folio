@@ -662,8 +662,6 @@ async function flushProgress() {
     } else {
       await api().SaveProgress(page, chapter, sub, scroll);
     }
-    // Cloud sync: push to folio-server if logged in (fire-and-forget).
-    syncProgressToServer(state.doc.fingerprint, page, chapter, sub, scroll);
   } catch (err) {
     console.error("SaveProgress failed", err);
   }
@@ -1592,6 +1590,21 @@ async function closeReader() {
   if (hasWails() && state.doc) {
     try {
       await flushProgress();
+      // Sync to cloud server before closing (await so the request completes).
+      const fp = state.doc.fingerprint;
+      if (fp && isLoggedIn()) {
+        let page = 0, chapter = 0, sub = 0, scroll = 0;
+        if (state.doc.format === "epub") {
+          page = state.globalPage | 0;
+          chapter = state.epubChapterIndex | 0;
+          sub = state.epubPage | 0;
+          scroll = currentScrollRatio() || 0;
+        } else {
+          page = Math.max(0, state.doc.pageIndex | 0);
+          scroll = state.mode === "scroll" ? currentScrollRatio() || 0 : 0;
+        }
+        await syncProgressToServer(fp, page, chapter, sub, scroll);
+      }
       await api().CloseDocument();
     } catch (_) {}
   }
@@ -3589,5 +3602,26 @@ async function boot() {
     }, 0);
   });
 }
+
+// Sync to server on page close (best-effort, non-blocking).
+window.addEventListener("beforeunload", () => {
+  if (state.doc && isLoggedIn() && state.doc.fingerprint) {
+    let page = 0, chapter = 0, sub = 0, scroll = 0;
+    if (state.doc.format === "epub") {
+      page = state.globalPage | 0;
+      chapter = state.epubChapterIndex | 0;
+      sub = state.epubPage | 0;
+      scroll = currentScrollRatio() || 0;
+    } else {
+      page = Math.max(0, state.doc.pageIndex | 0);
+      scroll = state.mode === "scroll" ? currentScrollRatio() || 0 : 0;
+    }
+    const pos = serializePosition(page, chapter, sub, scroll);
+    const device = getDeviceName();
+    // Use sendBeacon for reliable delivery during page unload.
+    const blob = new Blob([JSON.stringify({ fingerprint: state.doc.fingerprint, position: pos, device })], { type: "application/json" });
+    navigator.sendBeacon(`${FOLIO_API_BASE}/progress`, blob);
+  }
+});
 
 document.addEventListener("DOMContentLoaded", boot);
