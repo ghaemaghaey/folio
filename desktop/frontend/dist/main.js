@@ -1471,6 +1471,7 @@ async function enterDocument(doc) {
     id: doc.id || doc.ID || "",
     path: doc.path || doc.Path || "",
     title: doc.title || doc.Title || "Document",
+    fingerprint: doc.fingerprint || doc.Fingerprint || "",
     format,
     pageCount,
     chapterCount: pageCount,
