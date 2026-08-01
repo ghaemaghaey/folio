@@ -182,7 +182,7 @@ func (a *App) shutdown(ctx context.Context) {
 
 // AppVersion returns the app version string.
 func (a *App) AppVersion() string {
-	return "0.6.6"
+	return "0.6.7"
 }
 
 // OpenExternalURL opens http(s)/mailto links in the OS default browser.
@@ -1024,7 +1024,7 @@ func (a *App) UploadLocalFile(apiBase, token, filePath, title, author string) (m
 	}
 	req.Header.Set("Content-Type", w.FormDataContentType())
 	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("User-Agent", "Folio-Desktop/0.6.6")
+	req.Header.Set("User-Agent", "Folio-Desktop/0.6.7")
 
 	client := &http.Client{Timeout: 10 * time.Minute}
 	res, err := client.Do(req)

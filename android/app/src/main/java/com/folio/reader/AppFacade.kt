@@ -60,7 +60,7 @@ class AppFacade(
         var pageIndex: Int
     )
 
-    fun appVersion(): String = "0.6.6"
+    fun appVersion(): String = "0.6.7"
 
     fun getLibrary(): JSONArray {
         val arr = JSONArray()
@@ -332,7 +332,7 @@ class AppFacade(
             readTimeout = 600_000
             setRequestProperty("Authorization", "Bearer $token")
             setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
-            setRequestProperty("User-Agent", "Folio-Android/0.6.6")
+            setRequestProperty("User-Agent", "Folio-Android/0.6.7")
         }
 
         val total = file.length().coerceAtLeast(1)
