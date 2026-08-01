@@ -386,6 +386,24 @@ img {
 .reader-chrome--top {
   top: 0;
   border-bottom: 1px solid var(--border);
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  padding: var(--space-2) var(--space-3);
+}
+
+.reader-toolbar-row {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+
+.reader-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-1) 0 0;
+  overflow: hidden;
 }
 
 .reader-chrome--bottom {
@@ -416,22 +434,23 @@ img {
 }
 
 .reader-title-block {
-  flex: 1;
+  display: none;
+}
+
+.reader-title-row {
   min-width: 0;
-  max-width: 45vw;
-  text-align: center;
-  overflow: hidden;
 }
 
 .reader-title {
   font-family: var(--font-display);
-  font-size: var(--text-base);
+  font-size: var(--text-sm);
   font-weight: var(--weight-medium);
   letter-spacing: -0.01em;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--ink);
+  margin: 0;
 }
 
 .reader-meta {

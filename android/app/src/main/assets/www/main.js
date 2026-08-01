@@ -602,6 +602,7 @@ function applyMode(mode) {
 function anyPanelOpen() {
   return (
     !el.fontPanel?.classList.contains("is-hidden") ||
+    !el.zoomPanel?.classList.contains("is-hidden") ||
     !el.guidePanel?.classList.contains("is-hidden") ||
     !el.tocPanel?.classList.contains("is-hidden")
   );
@@ -3321,23 +3322,36 @@ function bindEvents() {
     ?.querySelector(".reader-chrome--bottom")
     ?.addEventListener("mouseleave", () => scheduleHideChrome());
 
-  // Content click: hide chrome + popovers (not TOC drawer unless desired)
+  // Content tap: toggle chrome (single tap to show/hide)
   el.stage?.addEventListener("click", (e) => {
+    // Ignore clicks inside panels, popups, nav, links, images
     if (
       e.target.closest(".edge-nav") ||
       e.target.closest(".font-panel") ||
       e.target.closest(".zoom-panel") ||
       e.target.closest(".guide-panel") ||
       e.target.closest(".toc-panel") ||
+      e.target.closest(".device-picker-overlay") ||
       e.target.closest(".reading-guide") ||
       e.target.closest("a") ||
       e.target.closest("img")
     )
       return;
-    el.fontPanel.classList.add("is-hidden");
-    el.zoomPanel?.classList.add("is-hidden");
-    el.guidePanel.classList.add("is-hidden");
-    hideChrome();
+    // If chrome is visible and a panel is open, close the panel but keep chrome
+    if (state.chromeVisible) {
+      const panelOpen = !el.fontPanel.classList.contains("is-hidden") ||
+        !el.zoomPanel?.classList.contains("is-hidden") ||
+        !el.guidePanel.classList.contains("is-hidden");
+      if (panelOpen) {
+        el.fontPanel.classList.add("is-hidden");
+        el.zoomPanel?.classList.add("is-hidden");
+        el.guidePanel.classList.add("is-hidden");
+        return;
+      }
+      hideChrome();
+    } else {
+      showChromeBriefly();
+    }
   });
 
   // NO mousemove bumpChrome on stage
