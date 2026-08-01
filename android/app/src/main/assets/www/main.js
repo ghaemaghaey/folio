@@ -251,6 +251,65 @@ async function fetchProgressFromServer(fingerprint) {
   } catch { return null; }
 }
 
+async function fetchAllDeviceProgress(fingerprint) {
+  if (!isLoggedIn() || !fingerprint) return [];
+  try {
+    const data = await folioApi(`/progress/${encodeURIComponent(fingerprint)}/devices`);
+    return Array.isArray(data) ? data : [];
+  } catch { return []; }
+}
+
+function showDevicePickerPopup(devices, bookTitle) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "device-picker-overlay";
+    const box = document.createElement("div");
+    box.className = "device-picker";
+    const icons = { Desktop: "\uD83D\uDDA5\uFE0F", Android: "\uD83D\uDCF1", iOS: "\uD83D\uDCF1" };
+    let html = `<h3 class="device-picker-title">Continue reading</h3>`;
+    html += `<p class="device-picker-sub">${escapeHtml(bookTitle)}</p>`;
+    for (const d of devices) {
+      const icon = icons[d.device] || "\uD83D\uDCBB";
+      const pg = (d.pos.p || 0) + 1;
+      const timeAgo = d.updated ? timeAgoStr(d.updated) : "";
+      html += `<button class="device-picker-btn" data-device="${escapeHtml(d.device)}">` +
+        `<span class="device-picker-icon">${icon}</span>` +
+        `<span class="device-picker-name">${escapeHtml(d.device)}</span>` +
+        `<span class="device-picker-page">Page ${pg}</span>` +
+        `<span class="device-picker-time">${timeAgo}</span>` +
+        `</button>`;
+    }
+    html += `<button class="device-picker-btn device-picker-cancel">Cancel</button>`;
+    box.innerHTML = html;
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    overlay.addEventListener("click", (e) => {
+      const btn = e.target.closest(".device-picker-btn");
+      if (!btn) return;
+      if (btn.classList.contains("device-picker-cancel")) {
+        overlay.remove();
+        resolve(null);
+        return;
+      }
+      const devName = btn.dataset.device;
+      const chosen = devices.find((d) => d.device === devName);
+      overlay.remove();
+      resolve(chosen || null);
+    });
+  });
+}
+
+function timeAgoStr(dateStr) {
+  try {
+    const d = new Date(dateStr.replace(" ", "T") + "Z");
+    const diff = (Date.now() - d.getTime()) / 1000;
+    if (diff < 60) return "just now";
+    if (diff < 3600) return Math.floor(diff / 60) + "m ago";
+    if (diff < 86400) return Math.floor(diff / 3600) + "h ago";
+    return Math.floor(diff / 86400) + "d ago";
+  } catch { return ""; }
+}
+
 const $ = (s) => document.querySelector(s);
 const el = {
   library: $("#view-library"),
@@ -1363,13 +1422,25 @@ async function openBookId(id) {
         }
       }
     } catch (_) {}
-    // Cloud sync: check if server has a newer position (cross-device).
+    // Cloud sync: check if server has positions from multiple devices.
     const fp = doc.fingerprint || doc.Fingerprint || "";
-    const serverProg = await fetchProgressFromServer(fp);
-    if (serverProg) {
-      const sp = deserializePosition(serverProg.position);
-      if (sp) {
-        // Server wins on open — this is how cross-device sync works.
+    const devices = await fetchAllDeviceProgress(fp);
+    if (devices.length > 0) {
+      const parsed = devices.map((d) => {
+        const sp = deserializePosition(d.position);
+        return { device: d.device || "?", pos: sp, updated: d.updated_at || "" };
+      }).filter((d) => d.pos);
+      const unique = new Set(parsed.map((d) => d.pos.p));
+      if (parsed.length > 1 && unique.size > 1) {
+        const chosen = await showDevicePickerPopup(parsed, doc.title || "this book");
+        if (chosen && chosen.pos) {
+          savedPage = chosen.pos.p ?? savedPage;
+          savedChapter = chosen.pos.c ?? savedChapter;
+          savedSubPage = chosen.pos.s ?? savedSubPage;
+          savedScroll = chosen.pos.sc ?? savedScroll;
+        }
+      } else if (parsed.length === 1) {
+        const sp = parsed[0].pos;
         savedPage = sp.p ?? savedPage;
         savedChapter = sp.c ?? savedChapter;
         savedSubPage = sp.s ?? savedSubPage;

@@ -2263,30 +2263,33 @@ html {
 /* ── Device picker popup ──────────────────────────────────────────── */
 .device-picker-overlay {
   position: fixed; inset: 0; z-index: 10000;
-  background: rgba(0,0,0,.55); display: flex;
+  background: rgba(0,0,0,.6); display: flex;
   align-items: center; justify-content: center;
 }
 .device-picker {
-  background: var(--bg-surface); color: var(--ink);
-  border-radius: var(--radius-lg); padding: var(--space-5);
-  min-width: 280px; max-width: 90vw; box-shadow: var(--shadow-lg);
-  display: flex; flex-direction: column; gap: var(--space-3);
+  background: #fff; color: #1a1a1a;
+  border-radius: 12px; padding: 1.5rem;
+  min-width: 300px; max-width: 90vw;
+  box-shadow: 0 8px 32px rgba(0,0,0,.25);
+  display: flex; flex-direction: column; gap: 0.75rem;
+  border: 1px solid #e5e5e5;
 }
-.device-picker-title { font-size: var(--text-lg); font-weight: 600; margin: 0; }
-.device-picker-sub { font-size: var(--text-sm); color: var(--ink-dim); margin: 0 0 var(--space-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
+.device-picker-title { font-size: 1.15rem; font-weight: 700; margin: 0; color: #1a1a1a; }
+.device-picker-sub { font-size: 0.85rem; color: #666; margin: 0 0 0.5rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 280px; }
 .device-picker-btn {
-  display: flex; align-items: center; gap: var(--space-3);
-  padding: var(--space-3) var(--space-4); border: 1px solid var(--border);
-  border-radius: var(--radius); background: var(--bg-card); color: var(--ink);
-  cursor: pointer; font-size: var(--text-sm); text-align: left;
+  display: flex; align-items: center; gap: 0.75rem;
+  padding: 0.75rem 1rem; border: 1px solid #e5e5e5;
+  border-radius: 8px; background: #f9f9f9; color: #1a1a1a;
+  cursor: pointer; font-size: 0.9rem; text-align: left;
   transition: background .15s;
 }
-.device-picker-btn:hover { background: var(--bg-hover, var(--bg-surface)); }
+.device-picker-btn:hover { background: #f0f0f0; }
 .device-picker-icon { font-size: 1.4rem; }
 .device-picker-name { font-weight: 600; flex: 1; }
-.device-picker-page { color: var(--accent); font-weight: 500; }
-.device-picker-time { color: var(--ink-dim); font-size: var(--text-xs); }
-.device-picker-cancel { background: transparent; border-color: transparent; color: var(--ink-dim); justify-content: center; }
+.device-picker-page { color: #2563eb; font-weight: 600; }
+.device-picker-time { color: #888; font-size: 0.75rem; }
+.device-picker-cancel { background: transparent; border-color: transparent; color: #888; justify-content: center; }
+.device-picker-cancel:hover { background: #f0f0f0; }
 
 /* ── Mobile toolbar collapse ──────────────────────────────────────── */
 .toolbar-more { display: none; }
