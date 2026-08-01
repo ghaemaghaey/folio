@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
 	"github.com/folio-reader/folio/internal/pdf"
 )
 
@@ -36,12 +37,14 @@ func main() {
 	}
 	fmt.Println("pages:", n)
 
-	url, w, h, err := r.RenderPage(path, 0, 128)
+	pg, err := r.RenderPage(path, 0, 128)
 	if err != nil {
 		fmt.Println("RenderPage:", err)
 		os.Exit(1)
 	}
-	pre := url
-	if len(pre) > 40 { pre = pre[:40] }
-	fmt.Printf("render ok %dx%d urlLen=%d prefix=%s\n", w, h, len(url), pre)
+	pre := pg.URL
+	if len(pre) > 40 {
+		pre = pre[:40]
+	}
+	fmt.Printf("render ok %dx%d urlLen=%d prefix=%s\n", pg.Width, pg.Height, len(pg.URL), pre)
 }

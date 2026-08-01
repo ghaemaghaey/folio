@@ -1329,8 +1329,8 @@ img {
   margin: 1em auto;
 }
 
-/* Long URLs must break mid-string (break-word alone will NOT wrap them) */
-.epub-content a,
+/* Only actual links (with href) get link styling — anchor-only <a> tags
+   (id/name used for positioning by many EPUBs) must look like normal text. */
 .epub-content a[href] {
   color: var(--accent);
   display: inline;
