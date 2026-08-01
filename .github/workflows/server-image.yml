@@ -17,6 +17,11 @@ on:
       - ".github/workflows/server-image.yml"
   workflow_dispatch:
 
+# Cancel stale runs for the same PR or same branch so only the latest push runs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 env:
   REGISTRY: ghcr.io
 

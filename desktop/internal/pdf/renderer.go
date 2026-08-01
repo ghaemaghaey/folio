@@ -332,17 +332,31 @@ func (r *Renderer) RenderPage(path string, pageIndex int, dpi int) (Page, error)
 		return Page{URL: e.url, Width: e.width, Height: e.height}, nil
 	}
 
-	// 2) Disk hit
-	if w, h, ok := r.diskDimsLocked(key); ok {
-		r.putCacheLocked(key, httpURL, w, h)
-		out := Page{URL: httpURL, Width: w, Height: h}
-		// Prefer loading via URL; attach dataURL only if small enough.
-		if p := r.diskPath(key); p != "" {
-			if b, err := os.ReadFile(p); err == nil && len(b) <= 900_000 {
-				out.DataURL = "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(b)
+	// 2) Disk hit — avoid double-read: stat first, then read once for small
+	//    pages (dims + dataURL) or header-only for large pages (dims only).
+	if p := r.diskPath(key); p != "" {
+		if st, err := os.Stat(p); err == nil && !st.IsDir() && st.Size() >= 32 {
+			if st.Size() <= 2_000_000 {
+				// Small enough to inline as dataURL — single read for dims + data
+				if b, err := os.ReadFile(p); err == nil {
+					if cfg, err := jpeg.DecodeConfig(bytes.NewReader(b)); err == nil {
+						r.putCacheLocked(key, httpURL, cfg.Width, cfg.Height)
+						return Page{
+							URL:     httpURL,
+							DataURL: "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(b),
+							Width:   cfg.Width,
+							Height:  cfg.Height,
+						}, nil
+					}
+				}
+			} else {
+				// Large file — read only JPEG header for dimensions (no dataURL)
+				if w, h, ok := r.diskDimsLocked(key); ok {
+					r.putCacheLocked(key, httpURL, w, h)
+					return Page{URL: httpURL, Width: w, Height: h}, nil
+				}
 			}
 		}
-		return out, nil
 	}
 
 	// 3) Render
@@ -387,7 +401,7 @@ func (r *Renderer) RenderPage(path string, pageIndex int, dpi int) (Page, error)
 	// Always include dataURL when reasonably small so WebView works even if
 	// the asset middleware fails. Large pages use URL only.
 	out := Page{URL: httpURL, Width: w, Height: h}
-	if len(jpegBytes) <= 900_000 { // ~0.9MB raw jpeg → fine over bridge + blob
+	if len(jpegBytes) <= 2_000_000 { // ~2MB — covers virtually all pages at ≤200 DPI
 		out.DataURL = "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(jpegBytes)
 	}
 	return out, nil
@@ -435,11 +449,14 @@ func (r *Renderer) diskDimsLocked(key string) (w, h int, ok bool) {
 	if p == "" {
 		return 0, 0, false
 	}
-	b, err := os.ReadFile(p)
-	if err != nil || len(b) < 32 {
+	// Read only the JPEG header (SOF marker) instead of the entire file.
+	// jpeg.DecodeConfig stops after finding dimensions, so this is cheap.
+	f, err := os.Open(p)
+	if err != nil {
 		return 0, 0, false
 	}
-	cfg, err := jpeg.DecodeConfig(bytes.NewReader(b))
+	defer f.Close()
+	cfg, err := jpeg.DecodeConfig(f)
 	if err != nil {
 		return 0, 0, false
 	}
@@ -494,20 +511,31 @@ func hashDoc(path string, data []byte) string {
 	return hex.EncodeToString(h.Sum(nil))[:24]
 }
 
+// Persistent debug log file handle — avoids open/close overhead on every call.
+var (
+	debugLogMu   sync.Mutex
+	debugLogFile *os.File
+)
+
 // DebugLog appends a line to ~/.folio/pdf-debug.log (best-effort).
+// Uses a persistent file handle instead of opening/closing on every call.
 func DebugLog(format string, args ...any) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return
+	debugLogMu.Lock()
+	defer debugLogMu.Unlock()
+	if debugLogFile == nil {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return
+		}
+		dir := filepath.Join(home, ".folio")
+		_ = os.MkdirAll(dir, 0o755)
+		f, err := os.OpenFile(filepath.Join(dir, "pdf-debug.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err != nil {
+			return
+		}
+		debugLogFile = f
 	}
-	dir := filepath.Join(home, ".folio")
-	_ = os.MkdirAll(dir, 0o755)
-	f, err := os.OpenFile(filepath.Join(dir, "pdf-debug.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	_, _ = fmt.Fprintf(f, time.Now().Format("15:04:05.000")+" "+format+"\n", args...)
+	_, _ = fmt.Fprintf(debugLogFile, time.Now().Format("15:04:05.000")+" "+format+"\n", args...)
 }
 
 // ResolveCacheFile maps /__folio_pdf/<hash>/file.jpg → absolute path under disk root.
