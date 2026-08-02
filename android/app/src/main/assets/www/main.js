@@ -181,6 +181,17 @@ function getDeviceName() {
   return `Android-${id}`;
 }
 
+/** Normalize device name to platform keyword for same-device comparison. */
+function normalizeDevicePlatform(name) {
+  const n = (name || "").toLowerCase();
+  if (n.includes("android") || n.includes("samsung") || n.includes("xiaomi") || n.includes("pixel") || n.includes("oneplus") || n.includes("poco") || n.includes("redmi") || n.includes("huawei") || n.includes("oppo") || n.includes("vivo") || n.includes("motorola") || n.includes("nokia") || n.includes("sony")) return "android";
+  if (n.includes("iphone") || n.includes("ipad") || n.includes("ios")) return "ios";
+  if (n.includes("windows") || n.includes("pc") || n.includes("laptop") || n.includes("hp") || n.includes("dell") || n.includes("lenovo") || n.includes("asus")) return "windows";
+  if (n.includes("mac")) return "mac";
+  if (n.includes("linux")) return "linux";
+  return n || "unknown";
+}
+
 /** Serialize reading position to a compact JSON string for the server. */
 function serializePosition(page, chapter, subPage, scroll) {
   return JSON.stringify({ p: page | 0, c: chapter | 0, s: subPage | 0, sc: scroll || 0 });
@@ -1554,6 +1565,7 @@ async function openBookId(id) {
     const fp = doc.fingerprint || doc.Fingerprint || "";
     const devices = await fetchAllDeviceProgress(fp);
     const currentDevice = getDeviceName();
+    const currentPlatform = normalizeDevicePlatform(currentDevice);
     if (devices.length > 0) {
       const parsed = devices.map((d) => {
         const sp = deserializePosition(d.position);
@@ -1561,8 +1573,8 @@ async function openBookId(id) {
       }).filter((d) => d.pos);
 
       if (doc.format === "epub") {
-        // Filter to only cross-device positions (different from current device)
-        const crossDevice = parsed.filter((d) => d.device !== currentDevice);
+        // Filter to only cross-device positions (different platform)
+        const crossDevice = parsed.filter((d) => normalizeDevicePlatform(d.device) !== currentPlatform);
         if (crossDevice.length > 0) {
           const epubKey = (d) => `${d.pos.c || 0}:${d.pos.co || 0}`;
           const unique = new Set(crossDevice.map(epubKey));
@@ -1585,7 +1597,7 @@ async function openBookId(id) {
         // Same device: skip restore, local progress is already correct
       } else {
         // PDF: filter to cross-device positions
-        const crossDevice = parsed.filter((d) => d.device !== currentDevice);
+        const crossDevice = parsed.filter((d) => normalizeDevicePlatform(d.device) !== currentPlatform);
         if (crossDevice.length > 0) {
           const posKey = (d) => `${d.pos.p}:${d.pos.c || 0}:${d.pos.s || 0}`;
           const unique = new Set(crossDevice.map(posKey));
