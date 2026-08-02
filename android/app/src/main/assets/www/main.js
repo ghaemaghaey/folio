@@ -3261,6 +3261,7 @@ function bindEvents() {
   // Drag guide vertically (screen-fixed)
   el.guide?.addEventListener("pointerdown", (e) => {
     if (state.guideLocked || !state.guideOn) return;
+    e.preventDefault();
     state.guideDragging = true;
     el.guide.setPointerCapture(e.pointerId);
   });

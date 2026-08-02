@@ -1840,6 +1840,7 @@ html[data-font="gandom"] .epub-content {
 .reading-guide.is-unlocked {
   pointer-events: auto;
   cursor: ns-resize;
+  touch-action: none;
 }
 
 .guide-panel {
