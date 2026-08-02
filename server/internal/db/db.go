@@ -1,4 +1,4 @@
-package db
+package db // folio-server database layer
 
 import (
 	"database/sql"
