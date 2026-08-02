@@ -859,6 +859,14 @@ async function flushProgress() {
     } else {
       await api().SaveProgress(page, chapter, sub, scroll);
     }
+    // Debounced cloud sync: at most every 30 seconds during active reading
+    if (state.doc.fingerprint && isLoggedIn()) {
+      const now = Date.now();
+      if (!state._lastCloudSync || now - state._lastCloudSync > 30000) {
+        state._lastCloudSync = now;
+        syncProgressToServer(state.doc.fingerprint, page, chapter, sub, scroll);
+      }
+    }
   } catch (err) {
     console.error("SaveProgress failed", err);
   }
