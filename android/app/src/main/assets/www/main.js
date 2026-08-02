@@ -355,15 +355,21 @@ async function drainSyncQueue() {
 }
 
 async function syncProgressToServer(fingerprint, page, chapter, subPage, scroll) {
-  if (!isLoggedIn() || !fingerprint) return;
+  if (!isLoggedIn() || !fingerprint) {
+    console.log("[sync] skipped: loggedIn=" + isLoggedIn() + " fp=" + fingerprint);
+    return;
+  }
   const pos = serializePosition(page, chapter, subPage, scroll);
   const device = getDeviceName();
+  console.log("[sync] POST fp=" + fingerprint + " device=" + device + " pos=" + pos + " api=" + FOLIO_API_BASE);
   try {
     await folioApi("/progress", {
       method: "POST",
       body: { fingerprint, position: pos, device },
     });
+    console.log("[sync] POST ok");
   } catch (e) {
+    console.warn("[sync] POST failed:", e.message, e.status);
     queueSync(fingerprint, pos, device);
   }
 }
