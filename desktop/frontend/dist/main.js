@@ -3354,6 +3354,11 @@ function bindEvents() {
     state.guideDragging = false;
     persistGuide();
   });
+  el.guide?.addEventListener("pointercancel", () => {
+    if (!state.guideDragging) return;
+    state.guideDragging = false;
+    persistGuide();
+  });
 
   el.lightbox?.addEventListener("click", (e) => {
     if (e.target === el.lightbox || e.target === el.lightboxClose) closeLightbox();

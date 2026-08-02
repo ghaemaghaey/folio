@@ -16,7 +16,9 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.core.view.ViewCompat
 import com.folio.reader.bridge.FolioJsBridge
 import com.folio.reader.library.FolioPaths
 import com.folio.reader.library.sanitizeFilename
@@ -93,7 +95,7 @@ class MainActivity : AppCompatActivity(), FolioJsBridge.HostActions {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        WindowCompat.setDecorFitsSystemWindows(window, true)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         WindowInsetsControllerCompat(window, window.decorView).isAppearanceLightStatusBars = true
 
         webView = WebView(this).apply {
@@ -103,10 +105,18 @@ class MainActivity : AppCompatActivity(), FolioJsBridge.HostActions {
             )
             setBackgroundColor(0xFFF0E6D2.toInt())
         }
-        setContentView(FrameLayout(this).apply {
+        val root = FrameLayout(this).apply {
             setBackgroundColor(0xFFF0E6D2.toInt())
             addView(webView)
-        })
+        }
+        setContentView(root)
+
+        // Apply system bar insets so content doesn't overlap status/nav bars
+        ViewCompat.setOnApplyWindowInsetsListener(root) { view, windowInsets ->
+            val insets = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars())
+            view.setPadding(insets.left, insets.top, insets.right, insets.bottom)
+            WindowInsetsCompat.CONSUMED
+        }
 
         app = AppFacade(applicationContext) { name, payload ->
             if (::bridge.isInitialized) bridge.emitEvent(name, payload)

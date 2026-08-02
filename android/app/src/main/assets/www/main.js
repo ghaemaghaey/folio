@@ -3279,17 +3279,20 @@ function bindEvents() {
     state.guideDragging = false;
     persistGuide();
   });
+  el.guide?.addEventListener("pointercancel", () => {
+    if (!state.guideDragging) return;
+    state.guideDragging = false;
+    persistGuide();
+  });
 
   el.lightbox?.addEventListener("click", (e) => {
     if (e.target === el.lightbox || e.target === el.lightboxClose) closeLightbox();
   });
   el.lightboxClose?.addEventListener("click", closeLightbox);
 
-  // Click-drag pan (Android-like) on reading surfaces
+  // Click-drag pan on PDF single-page view only
+  // scrollViewport and epubBook use native scrolling (momentum/inertia)
   setupDragPan(el.pageViewport);
-  setupDragPan(el.scrollViewport);
-  setupDragPan(el.epubBook);
-  setupDragPan(el.epubPages);
 
   // Edge hotspots only — do NOT show chrome on content click or general move
   el.hotspotTop?.addEventListener("mouseenter", () => {

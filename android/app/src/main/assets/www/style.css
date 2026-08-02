@@ -160,7 +160,7 @@ img {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--space-5) var(--space-6);
+  padding: max(var(--space-5), env(safe-area-inset-top)) var(--space-6) var(--space-5);
   flex-shrink: 0;
 }
 
@@ -1626,6 +1626,7 @@ html[data-font="gandom"] .epub-content {
   overflow-x: hidden !important;
   overflow-y: auto !important;
   overscroll-behavior-x: none;
+  -webkit-overflow-scrolling: touch;
   touch-action: pan-y;
   box-shadow: var(--page-shadow);
   height: 100%;
@@ -1795,7 +1796,8 @@ html[data-font="gandom"] .epub-content {
 
 .scroll-viewport {
   scroll-behavior: auto;
-  touch-action: none;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
 }
 
 .page-viewport {
