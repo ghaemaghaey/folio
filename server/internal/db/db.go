@@ -1,4 +1,4 @@
-package db // folio-server database layer
+package db // folio-server database layer — v0.7.3
 
 import (
 	"database/sql"
