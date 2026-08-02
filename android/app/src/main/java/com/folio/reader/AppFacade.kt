@@ -445,7 +445,8 @@ class AppFacade(
         opdsID: String,
         title: String,
         acquisitionHref: String,
-        mimeType: String
+        mimeType: String,
+        coverURL: String = ""
     ): JSONObject {
         if (acquisitionHref.isBlank()) throw IllegalArgumentException("no acquisition link")
         val client = opdsClient()
@@ -567,6 +568,7 @@ class AppFacade(
                 path = dest.absolutePath,
                 title = title.ifBlank { stem },
                 format = format,
+                coverDataURL = coverURL.ifEmpty { null },
                 fileSize = meta.size,
                 modTimeUnix = meta.modTimeUnix,
                 fingerprint = meta.fingerprint
@@ -806,6 +808,13 @@ class AppFacade(
             modTimeUnix = meta.modTimeUnix,
             fingerprint = meta.fingerprint
         )
+
+        // Extract EPUB cover image if available
+        val coverUrl = bookEpub.coverDataURL()
+        if (coverUrl.isNotEmpty()) {
+            libBook = libBook.copy(coverDataURL = coverUrl)
+        }
+
         var lastPage = 0
         var lastChapter = 0
         var lastSubPage = 0

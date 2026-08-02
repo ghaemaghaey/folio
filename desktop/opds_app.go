@@ -351,7 +351,7 @@ func firstNonEmpty(vals ...string) string {
 
 // OPDSDownload downloads the preferred (or specified) format into books/ and
 // registers it on the local shelf. Emits "opds:download-progress" events.
-func (a *App) OPDSDownload(opdsID, title, acquisitionHref, mimeType string) (*OPDSDownloadResult, error) {
+func (a *App) OPDSDownload(opdsID, title, acquisitionHref, mimeType, coverURL string) (*OPDSDownloadResult, error) {
 	client, err := a.opdsClient()
 	if err != nil {
 		return nil, err
@@ -536,6 +536,7 @@ func (a *App) OPDSDownload(opdsID, title, acquisitionHref, mimeType string) (*OP
 		Path:        finalPath,
 		Title:       title,
 		Format:      format,
+		CoverDataURL: coverURL,
 		FileSize:    meta.Size,
 		ModTimeUnix: meta.ModTimeUnix,
 		Fingerprint: meta.Fingerprint,

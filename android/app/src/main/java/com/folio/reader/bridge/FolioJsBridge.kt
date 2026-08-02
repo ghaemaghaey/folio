@@ -152,7 +152,8 @@ class FolioJsBridge(
                 args.optString(0),
                 args.optString(1),
                 args.optString(2),
-                args.optString(3)
+                args.optString(3),
+                args.optString(4)
             )
             "UploadLocalFile" -> app.uploadLocalFile(
                 args.optString(0),

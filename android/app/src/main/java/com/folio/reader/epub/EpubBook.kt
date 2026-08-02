@@ -30,9 +30,33 @@ class EpubBook private constructor(
     val title: String,
     val language: String,
     val spine: List<SpineItem>,
-    private val files: Map<String, ByteArray>
+    private val files: Map<String, ByteArray>,
+    val coverImagePath: String = ""
 ) {
     fun chapterCount(): Int = spine.size
+
+    /** Extract cover image bytes from the epub zip, or null if no cover. */
+    fun extractCover(): ByteArray? {
+        if (coverImagePath.isEmpty()) return null
+        val key = coverImagePath.lowercase()
+        return files[key] ?: files["./$key"] ?: run {
+            // Try without leading ./
+            val clean = key.removePrefix("./")
+            files[clean]
+        }
+    }
+
+    /** Return a base64 data URL for the cover image, or empty string. */
+    fun coverDataURL(): String {
+        val data = extractCover() ?: return ""
+        val mediaType = when {
+            data.size > 8 && data[0] == 0x89.toByte() && data[1] == 0x50.toByte() -> "image/png"
+            data.size > 3 && data[0] == 0x47.toByte() && data[1] == 0x49.toByte() -> "image/gif"
+            data.size > 3 && data[0] == 0x52.toByte() && data[1] == 0x49.toByte() -> "image/webp"
+            else -> "image/jpeg"
+        }
+        return "data:$mediaType;base64,${Base64.encodeToString(data, Base64.NO_WRAP)}"
+    }
 
     fun toc(): List<TocItem> = spine.mapIndexed { i, s ->
         val label = s.label.trim().ifEmpty { "Chapter ${i + 1}" }
@@ -149,7 +173,7 @@ class EpubBook private constructor(
             val opfData = files[opfPath] ?: files[opfPath.lowercase()]
                 ?: throw IllegalArgumentException("missing OPF: $opfPath")
 
-            val (metaTitle, metaLang, manifest, spineIds) = parseOpf(opfData)
+            val (metaTitle, metaLang, manifest, spineIds, coverPath) = parseOpf(opfData)
             val spine = mutableListOf<SpineItem>()
             for (id in spineIds) {
                 val item = manifest[id] ?: continue
@@ -182,7 +206,17 @@ class EpubBook private constructor(
                     }
                 }
             }
-            return EpubBook(title, metaLang, spine, files)
+            // Resolve cover path relative to OPF directory
+            val resolvedCoverPath = if (coverPath.isNotEmpty()) {
+                val p = if (opfDir.isNotEmpty() && !coverPath.startsWith("/")) {
+                    cleanPath(joinPath(opfDir, coverPath))
+                } else {
+                    cleanPath(coverPath)
+                }
+                p
+            } else ""
+
+            return EpubBook(title, metaLang, spine, files, resolvedCoverPath)
         }
 
         private data class ManifestItem(
@@ -196,7 +230,8 @@ class EpubBook private constructor(
             val title: String,
             val language: String,
             val manifest: Map<String, ManifestItem>,
-            val spineIds: List<String>
+            val spineIds: List<String>,
+            val coverPath: String = ""
         )
 
         private fun parseRootfile(xml: ByteArray): String {
@@ -233,6 +268,7 @@ class EpubBook private constructor(
             var inManifest = false
             var inSpine = false
             var inMetadata = false
+            var coverContentId = ""
 
             var event = parser.eventType
             while (event != XmlPullParser.END_DOCUMENT) {
@@ -248,6 +284,13 @@ class EpubBook private constructor(
                             }
                             "language" -> if (inMetadata && language.isEmpty()) {
                                 language = parser.nextText().trim()
+                            }
+                            "meta" -> if (inMetadata) {
+                                val name = parser.getAttributeValue(null, "name") ?: ""
+                                val content = parser.getAttributeValue(null, "content") ?: ""
+                                if (name.equals("cover", ignoreCase = true) && content.isNotEmpty()) {
+                                    coverContentId = content
+                                }
                             }
                             "item" -> if (inManifest) {
                                 val id = parser.getAttributeValue(null, "id") ?: ""
@@ -275,7 +318,23 @@ class EpubBook private constructor(
                 }
                 event = parser.next()
             }
-            return OpfResult(title, language, manifest, spineIds)
+            // Detect cover image
+            var coverPath = ""
+            // EPUB2: <meta name="cover" content="cover-image-id"/>
+            if (coverContentId.isNotEmpty()) {
+                manifest[coverContentId]?.let { coverPath = it.href }
+            }
+            // EPUB3: manifest item with properties="cover-image"
+            if (coverPath.isEmpty()) {
+                for (it in manifest.values) {
+                    if (it.properties.contains("cover-image")) {
+                        coverPath = it.href
+                        break
+                    }
+                }
+            }
+
+            return OpfResult(title, language, manifest, spineIds, coverPath)
         }
 
         private fun collectTocLabels(

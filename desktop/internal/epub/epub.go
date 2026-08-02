@@ -16,6 +16,8 @@ type Book struct {
 	Title    string
 	Language string
 	Spine    []SpineItem
+	// CoverImagePath is the path inside the epub zip to the cover image (if found).
+	CoverImagePath string
 	// raw zip for resource reads
 	files map[string][]byte
 	opfDir string
@@ -82,7 +84,7 @@ func Open(filePath string) (*Book, error) {
 		return nil, fmt.Errorf("missing OPF: %s", opfPath)
 	}
 
-	meta, manifest, spineIDs, err := parseOPF(opfData)
+	meta, manifest, spineIDs, coverPath, err := parseOPF(opfData)
 	if err != nil {
 		return nil, err
 	}
@@ -141,12 +143,56 @@ func Open(filePath string) (*Book, error) {
 		}
 	}
 
+	// Set cover image path (resolved relative to OPF directory)
+	if coverPath != "" {
+		if opfDir != "" && !strings.HasPrefix(coverPath, "/") {
+			coverPath = path.Join(opfDir, coverPath)
+		}
+		book.CoverImagePath = path.Clean(coverPath)
+	}
+
 	return book, nil
 }
 
 // ChapterCount returns spine length.
 func (b *Book) ChapterCount() int {
 	return len(b.Spine)
+}
+
+// ExtractCover returns the raw cover image bytes, or nil if no cover found.
+func (b *Book) ExtractCover() []byte {
+	if b.CoverImagePath == "" {
+		return nil
+	}
+	key := strings.ToLower(b.CoverImagePath)
+	if data, ok := b.files[key]; ok {
+		return data
+	}
+	// Try without leading ./
+	key = strings.TrimPrefix(key, "./")
+	if data, ok := b.files[key]; ok {
+		return data
+	}
+	return nil
+}
+
+// CoverDataURL returns a base64 data URL for the cover image, or "" if unavailable.
+func (b *Book) CoverDataURL() string {
+	data := b.ExtractCover()
+	if len(data) == 0 {
+		return ""
+	}
+	// Detect media type from the first bytes
+	mediaType := "image/jpeg"
+	switch {
+	case len(data) > 8 && data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47:
+		mediaType = "image/png"
+	case len(data) > 3 && data[0] == 0x47 && data[1] == 0x49 && data[2] == 0x46:
+		mediaType = "image/gif"
+	case len(data) > 3 && data[0] == 0x52 && data[1] == 0x49 && data[2] == 0x46 && data[3] == 0x46:
+		mediaType = "image/webp"
+	}
+	return fmt.Sprintf("data:%s;base64,%s", mediaType, base64.StdEncoding.EncodeToString(data))
 }
 
 // TOCItem is a chapter entry for the chapter list UI.
@@ -561,7 +607,7 @@ func parseRootfile(containerXML []byte) (string, error) {
 	return c.Rootfiles[0].FullPath, nil
 }
 
-func parseOPF(data []byte) (metaInfo, map[string]manifestItem, []string, error) {
+func parseOPF(data []byte) (metaInfo, map[string]manifestItem, []string, string, error) {
 	// Loose struct covering EPUB2/3 package
 	type item struct {
 		ID         string `xml:"id,attr"`
@@ -583,6 +629,7 @@ func parseOPF(data []byte) (metaInfo, map[string]manifestItem, []string, error) 
 			// Dublin Core with namespace variants
 			DCTitle []string `xml:"http://purl.org/dc/elements/1.1/ title"`
 			DCLang  []string `xml:"http://purl.org/dc/elements/1.1/ language"`
+			Metas   []meta   `xml:"meta"`
 		} `xml:"metadata"`
 		Manifest struct {
 			Items []item `xml:"item"`
@@ -603,7 +650,7 @@ func parseOPF(data []byte) (metaInfo, map[string]manifestItem, []string, error) 
 	if err := dec.Decode(&pkg); err != nil {
 		// fallback: try raw
 		if err2 := xml.Unmarshal(data, &pkg); err2 != nil {
-			return metaInfo{}, nil, nil, fmt.Errorf("parse opf: %v", err)
+			return metaInfo{}, nil, nil, "", fmt.Errorf("parse opf: %v", err)
 		}
 	}
 
@@ -639,7 +686,33 @@ func parseOPF(data []byte) (metaInfo, map[string]manifestItem, []string, error) 
 	for _, ir := range pkg.Spine.Itemrefs {
 		spine = append(spine, ir.IDRef)
 	}
-	return m, manifest, spine, nil
+
+	// Detect cover image
+	coverID := ""
+	// EPUB2: <meta name="cover" content="cover-image-id"/>
+	for _, mt := range pkg.Metadata.Metas {
+		if strings.EqualFold(mt.Name, "cover") && mt.Content != "" {
+			coverID = mt.Content
+			break
+		}
+	}
+	// EPUB3: manifest item with properties="cover-image"
+	if coverID == "" {
+		for _, it := range pkg.Manifest.Items {
+			if strings.Contains(it.Properties, "cover-image") {
+				coverID = it.ID
+				break
+			}
+		}
+	}
+	coverPath := ""
+	if coverID != "" {
+		if item, ok := manifest[coverID]; ok {
+			coverPath = item.Href
+		}
+	}
+
+	return m, manifest, spine, coverPath, nil
 }
 
 func extractDC(data []byte) (title, lang string) {

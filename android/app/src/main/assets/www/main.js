@@ -1222,7 +1222,7 @@ async function downloadCatalogBook(b, btnEl) {
     btnEl.textContent = "Downloading…";
   }
   try {
-    const result = await api().OPDSDownload(b.id, b.title, href, mime);
+    const result = await api().OPDSDownload(b.id, b.title, href, mime, b.coverURL || "");
     const updated = normalizeOPDSBook(result?.book || result?.Book || {});
     const idx = state.catalog.books.findIndex((x) => x.id === b.id);
     if (idx >= 0) {

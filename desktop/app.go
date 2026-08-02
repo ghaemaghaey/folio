@@ -622,6 +622,11 @@ func (a *App) openEPUB(path string, existingID string) (*DocumentInfo, error) {
 		Fingerprint: meta.Fingerprint,
 	}
 
+	// Extract EPUB cover image if available
+	if coverURL := bookEPUB.CoverDataURL(); coverURL != "" {
+		libBook.CoverDataURL = coverURL
+	}
+
 	lastPage := 0
 	lastChapter := 0
 	lastSubPage := 0
