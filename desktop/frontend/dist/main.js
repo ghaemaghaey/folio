@@ -1499,7 +1499,9 @@ async function openBookId(id) {
         const crossDevice = parsed.filter((d) => normalizeDevicePlatform(d.device) !== currentPlatform);
         console.log("[picker] crossDevice:", crossDevice.length, "devices:", crossDevice.map((d) => d.device));
         if (crossDevice.length > 0) {
-          const epubKey = (d) => `${d.pos.c || 0}:${d.pos.co || 0}`;
+          // Compare by chapter + scroll ratio (char offset alone isn't enough —
+          // two devices at same chapter but different scroll positions should show picker)
+          const epubKey = (d) => `${d.pos.c || 0}:${d.pos.sc || 0}`;
           const unique = new Set(crossDevice.map(epubKey));
           if (crossDevice.length > 1 && unique.size > 1) {
             const chosen = await showDevicePickerPopup(crossDevice, doc.title || "this book");
