@@ -1487,14 +1487,17 @@ async function openBookId(id) {
     const devices = await fetchAllDeviceProgress(fp);
     const currentDevice = getDeviceName();
     const currentPlatform = normalizeDevicePlatform(currentDevice);
+    console.log("[picker] devices:", devices.length, "current:", currentDevice, "platform:", currentPlatform);
     if (devices.length > 0) {
       const parsed = devices.map((d) => {
         const sp = deserializePosition(d.position);
         return { device: d.device || "?", pos: sp, updated: d.updated_at || "" };
       }).filter((d) => d.pos);
+      console.log("[picker] parsed:", parsed.map((d) => d.device + "=" + JSON.stringify(d.pos)));
 
       if (doc.format === "epub") {
         const crossDevice = parsed.filter((d) => normalizeDevicePlatform(d.device) !== currentPlatform);
+        console.log("[picker] crossDevice:", crossDevice.length, "devices:", crossDevice.map((d) => d.device));
         if (crossDevice.length > 0) {
           const epubKey = (d) => `${d.pos.c || 0}:${d.pos.co || 0}`;
           const unique = new Set(crossDevice.map(epubKey));
