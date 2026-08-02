@@ -99,8 +99,8 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           name: Folio ${{ github.ref_name }}
+          body_path: .github/RELEASE_TEMPLATE.md
           files: desktop/dist/${{ matrix.asset }}
-          generate_release_notes: true
           draft: false
           prerelease: false
           fail_on_unmatched_files: true
@@ -162,8 +162,8 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           name: Folio ${{ github.ref_name }}
+          body_path: .github/RELEASE_TEMPLATE.md
           files: desktop/dist/folio-linux-amd64-debian-trixie
-          generate_release_notes: true
           draft: false
           prerelease: false
           fail_on_unmatched_files: true
