@@ -629,18 +629,18 @@ img {
 
 /* Toast */
 .toast {
-  position: absolute;
-  bottom: var(--space-7);
+  position: fixed;
+  bottom: 2rem;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 40;
-  padding: 0.6rem 1.1rem;
+  z-index: 99999;
+  padding: 0.8rem 1.5rem;
   border-radius: var(--radius-pill);
-  background: var(--surface-elevated);
-  border: 1px solid var(--border-strong);
-  box-shadow: var(--shadow-md);
-  font-size: var(--text-sm);
-  color: var(--ink);
+  background: #22c55e;
+  color: #fff;
+  box-shadow: 0 4px 16px rgba(0,0,0,.3);
+  font-size: var(--text-base);
+  font-weight: 600;
   animation: fade-rise var(--dur-med) var(--ease-out) both;
 }
 

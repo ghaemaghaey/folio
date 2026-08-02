@@ -1798,7 +1798,7 @@ async function closeReader() {
           scroll = state.mode === "scroll" ? currentScrollRatio() || 0 : 0;
         }
         await syncProgressToServer(fp, page, chapter, sub, scroll);
-        toast("Progress synced", false);
+        toast("Progress synced ✓", false, 5000);
       }
       await api().CloseDocument();
     } catch (_) {}
