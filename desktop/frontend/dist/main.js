@@ -1474,6 +1474,7 @@ async function openBookId(id) {
     // Cloud sync: check if server has positions from multiple devices.
     const fp = doc.fingerprint || doc.Fingerprint || "";
     const devices = await fetchAllDeviceProgress(fp);
+    const currentDevice = getDeviceName();
     if (devices.length > 0) {
       const parsed = devices.map((d) => {
         const sp = deserializePosition(d.position);
@@ -1481,40 +1482,46 @@ async function openBookId(id) {
       }).filter((d) => d.pos);
 
       if (doc.format === "epub") {
-        const epubKey = (d) => `${d.pos.c || 0}:${d.pos.co || 0}`;
-        const unique = new Set(parsed.map(epubKey));
-        if (parsed.length > 1 && unique.size > 1) {
-          const chosen = await showDevicePickerPopup(parsed, doc.title || "this book");
-          if (chosen && chosen.pos) {
-            savedChapter = chosen.pos.c ?? savedChapter;
+        const crossDevice = parsed.filter((d) => d.device !== currentDevice);
+        if (crossDevice.length > 0) {
+          const epubKey = (d) => `${d.pos.c || 0}:${d.pos.co || 0}`;
+          const unique = new Set(crossDevice.map(epubKey));
+          if (crossDevice.length > 1 && unique.size > 1) {
+            const chosen = await showDevicePickerPopup(crossDevice, doc.title || "this book");
+            if (chosen && chosen.pos) {
+              savedChapter = chosen.pos.c ?? savedChapter;
+              savedScroll = 0;
+              state.pendingCharOffset = chosen.pos.co;
+              state.pendingFingerprint = chosen.pos.fp;
+            }
+          } else if (crossDevice.length === 1) {
+            const sp = crossDevice[0].pos;
+            savedChapter = sp.c ?? savedChapter;
             savedScroll = 0;
-            state.pendingCharOffset = chosen.pos.co;
-            state.pendingFingerprint = chosen.pos.fp;
+            state.pendingCharOffset = sp.co;
+            state.pendingFingerprint = sp.fp;
           }
-        } else if (parsed.length === 1) {
-          const sp = parsed[0].pos;
-          savedChapter = sp.c ?? savedChapter;
-          savedScroll = 0;
-          state.pendingCharOffset = sp.co;
-          state.pendingFingerprint = sp.fp;
         }
       } else {
-        const posKey = (d) => `${d.pos.p}:${d.pos.c || 0}:${d.pos.s || 0}`;
-        const unique = new Set(parsed.map(posKey));
-        if (parsed.length > 1 && unique.size > 1) {
-          const chosen = await showDevicePickerPopup(parsed, doc.title || "this book");
-          if (chosen && chosen.pos) {
-            savedPage = chosen.pos.p ?? savedPage;
-            savedChapter = chosen.pos.c ?? savedChapter;
-            savedSubPage = chosen.pos.s ?? savedSubPage;
+        const crossDevice = parsed.filter((d) => d.device !== currentDevice);
+        if (crossDevice.length > 0) {
+          const posKey = (d) => `${d.pos.p}:${d.pos.c || 0}:${d.pos.s || 0}`;
+          const unique = new Set(crossDevice.map(posKey));
+          if (crossDevice.length > 1 && unique.size > 1) {
+            const chosen = await showDevicePickerPopup(crossDevice, doc.title || "this book");
+            if (chosen && chosen.pos) {
+              savedPage = chosen.pos.p ?? savedPage;
+              savedChapter = chosen.pos.c ?? savedChapter;
+              savedSubPage = chosen.pos.s ?? savedSubPage;
+              savedScroll = 0;
+            }
+          } else if (crossDevice.length === 1) {
+            const sp = crossDevice[0].pos;
+            savedPage = sp.p ?? savedPage;
+            savedChapter = sp.c ?? savedChapter;
+            savedSubPage = sp.s ?? savedSubPage;
             savedScroll = 0;
           }
-        } else if (parsed.length === 1) {
-          const sp = parsed[0].pos;
-          savedPage = sp.p ?? savedPage;
-          savedChapter = sp.c ?? savedChapter;
-          savedSubPage = sp.s ?? savedSubPage;
-          savedScroll = 0;
         }
       }
     }
