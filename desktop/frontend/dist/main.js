@@ -787,14 +787,6 @@ async function flushProgress() {
     } else {
       await api().SaveProgress(page, chapter, sub, scroll);
     }
-    // Debounced cloud sync: at most every 30 seconds during active reading
-    if (state.doc.fingerprint && isLoggedIn()) {
-      const now = Date.now();
-      if (!state._lastCloudSync || now - state._lastCloudSync > 30000) {
-        state._lastCloudSync = now;
-        syncProgressToServer(state.doc.fingerprint, page, chapter, sub, scroll);
-      }
-    }
   } catch (err) {
     console.error("SaveProgress failed", err);
   }
@@ -1755,6 +1747,21 @@ async function closeReader() {
   if (hasWails() && state.doc) {
     try {
       await flushProgress();
+      // Sync to cloud on explicit exit
+      const fp = state.doc.fingerprint;
+      if (fp && isLoggedIn()) {
+        let page = 0, chapter = 0, sub = 0, scroll = 0;
+        if (state.doc.format === "epub") {
+          page = state.globalPage | 0;
+          chapter = state.epubChapterIndex | 0;
+          sub = state.epubPage | 0;
+          scroll = currentScrollRatio() || 0;
+        } else {
+          page = Math.max(0, state.doc.pageIndex | 0);
+          scroll = state.mode === "scroll" ? currentScrollRatio() || 0 : 0;
+        }
+        await syncProgressToServer(fp, page, chapter, sub, scroll);
+      }
       await api().CloseDocument();
     } catch (_) {}
   }
