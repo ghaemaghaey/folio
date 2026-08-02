@@ -1566,6 +1566,7 @@ async function openBookId(id) {
           const chosen = await showDevicePickerPopup(parsed, doc.title || "this book");
           if (chosen && chosen.pos) {
             savedChapter = chosen.pos.c ?? savedChapter;
+            savedScroll = 0;
             // Defer char offset restore to after EPUB loads
             state.pendingCharOffset = chosen.pos.co;
             state.pendingFingerprint = chosen.pos.fp;
@@ -1573,6 +1574,7 @@ async function openBookId(id) {
         } else if (parsed.length === 1) {
           const sp = parsed[0].pos;
           savedChapter = sp.c ?? savedChapter;
+          savedScroll = 0;
           state.pendingCharOffset = sp.co;
           state.pendingFingerprint = sp.fp;
         }
@@ -1586,14 +1588,14 @@ async function openBookId(id) {
             savedPage = chosen.pos.p ?? savedPage;
             savedChapter = chosen.pos.c ?? savedChapter;
             savedSubPage = chosen.pos.s ?? savedSubPage;
-            savedScroll = chosen.pos.sc ?? savedScroll;
+            savedScroll = 0;
           }
         } else if (parsed.length === 1) {
           const sp = parsed[0].pos;
           savedPage = sp.p ?? savedPage;
           savedChapter = sp.c ?? savedChapter;
           savedSubPage = sp.s ?? savedSubPage;
-          savedScroll = sp.sc ?? savedScroll;
+          savedScroll = 0;
         }
       }
     }
