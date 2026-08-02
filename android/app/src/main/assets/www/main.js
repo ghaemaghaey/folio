@@ -383,11 +383,20 @@ function showDevicePickerPopup(devices, bookTitle) {
     overlay.className = "device-picker-overlay";
     const box = document.createElement("div");
     box.className = "device-picker";
-    const icons = { Desktop: "\uD83D\uDDA5\uFE0F", Android: "\uD83D\uDCF1", iOS: "\uD83D\uDCF1" };
+    function getDeviceIcon(name) {
+      const n = name.toLowerCase();
+      if (n.includes("android") || n.includes("samsung") || n.includes("xiaomi") || n.includes("pixel") || n.includes("oneplus") || n.includes("poco") || n.includes("redmi") || n.includes("huawei") || n.includes("oppo") || n.includes("vivo") || n.includes("motorola") || n.includes("nokia") || n.includes("sony"))
+        return "\uD83D\uDCF1"; // 📱 phone
+      if (n.includes("iphone") || n.includes("ipad") || n.includes("ios"))
+        return "\uD83D\uDCF1"; // 📱 phone
+      if (n.includes("windows") || n.includes("linux") || n.includes("mac") || n.includes("desktop") || n.includes("pc") || n.includes("laptop") || n.includes("hp") || n.includes("dell") || n.includes("lenovo") || n.includes("asus"))
+        return "\uD83D\uDDA5\uFE0F"; // 🖥️ desktop
+      return "\uD83D\uDCBB"; // 💻 fallback
+    }
     let html = `<h3 class="device-picker-title">Continue reading</h3>`;
     html += `<p class="device-picker-sub">${escapeHtml(bookTitle)}</p>`;
     for (const d of devices) {
-      const icon = icons[d.device] || "\uD83D\uDCBB";
+      const icon = getDeviceIcon(d.device);
       const pg = (d.pos.p || 0) + 1;
       const timeAgo = d.updated ? timeAgoStr(d.updated) : "";
       html += `<button class="device-picker-btn" data-device="${escapeHtml(d.device)}">` +
