@@ -164,8 +164,14 @@ func (s *Store) UpsertProgress(userID int64, fingerprint, device, position strin
 		`INSERT INTO reading_positions (user_id, book_fingerprint, device, position, updated_at)
 		 VALUES (?, ?, ?, ?, ?)
 		 ON CONFLICT(user_id, book_fingerprint, device) DO UPDATE SET
-		   position = excluded.position,
-		   updated_at = excluded.updated_at`,
+		   position = CASE
+		     WHEN excluded.updated_at > reading_positions.updated_at THEN excluded.position
+		     ELSE reading_positions.position
+		   END,
+		   updated_at = CASE
+		     WHEN excluded.updated_at > reading_positions.updated_at THEN excluded.updated_at
+		     ELSE reading_positions.updated_at
+		   END`,
 		userID, fingerprint, device, position, now,
 	)
 	if err != nil {

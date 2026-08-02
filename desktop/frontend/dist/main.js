@@ -165,12 +165,17 @@ async function folioApi(path, { method = "GET", body, token, formData } = {}) {
 
 /** Detect device name for per-device progress tracking. */
 function getDeviceName() {
-  if (typeof navigator !== "undefined") {
-    const ua = navigator.userAgent || "";
-    if (/Android/i.test(ua)) return "Android";
-    if (/iPhone|iPad|iPod/i.test(ua)) return "iOS";
+  let id = localStorage.getItem("folio.deviceId");
+  if (!id) {
+    id = Math.random().toString(36).slice(2, 10);
+    localStorage.setItem("folio.deviceId", id);
   }
-  return "Desktop";
+  const ua = navigator.userAgent || "";
+  let platform = "Desktop";
+  if (/Android/i.test(ua)) platform = "Android";
+  else if (/iPhone|iPad|iPod/i.test(ua)) platform = "iOS";
+  if (platform === "Desktop") return `Desktop-${id}`;
+  return `${platform}-${id}`;
 }
 
 /** Serialize reading position to a compact JSON string for the server. */
@@ -708,6 +713,8 @@ async function flushProgress() {
     } else {
       await api().SaveProgress(page, chapter, sub, scroll);
     }
+    // Cloud sync (fire-and-forget, queued on failure)
+    syncProgressToServer(state.doc.fingerprint, page, chapter, sub, scroll);
   } catch (err) {
     console.error("SaveProgress failed", err);
   }
@@ -1402,7 +1409,8 @@ async function openBookId(id) {
         return { device: d.device || "?", pos: sp, updated: d.updated_at || "" };
       }).filter((d) => d.pos);
       // Check if devices disagree on position
-      const unique = new Set(parsed.map((d) => d.pos.p));
+      const posKey = (d) => `${d.pos.p}:${d.pos.c || 0}:${d.pos.s || 0}`;
+      const unique = new Set(parsed.map(posKey));
       if (parsed.length > 1 && unique.size > 1) {
         // Show device picker popup
         const chosen = await showDevicePickerPopup(parsed, doc.title || "this book");
@@ -1641,21 +1649,6 @@ async function closeReader() {
   if (hasWails() && state.doc) {
     try {
       await flushProgress();
-      // Sync to cloud server before closing (await so the request completes).
-      const fp = state.doc.fingerprint;
-      if (fp && isLoggedIn()) {
-        let page = 0, chapter = 0, sub = 0, scroll = 0;
-        if (state.doc.format === "epub") {
-          page = state.globalPage | 0;
-          chapter = state.epubChapterIndex | 0;
-          sub = state.epubPage | 0;
-          scroll = currentScrollRatio() || 0;
-        } else {
-          page = Math.max(0, state.doc.pageIndex | 0);
-          scroll = state.mode === "scroll" ? currentScrollRatio() || 0 : 0;
-        }
-        await syncProgressToServer(fp, page, chapter, sub, scroll);
-      }
       await api().CloseDocument();
     } catch (_) {}
   }
@@ -3676,12 +3669,19 @@ window.addEventListener("beforeunload", () => {
     }
     const pos = serializePosition(page, chapter, sub, scroll);
     const device = getDeviceName();
-    // Queue for retry if offline; otherwise send beacon
     if (!navigator.onLine) {
       queueSync(state.doc.fingerprint, pos, device);
     } else {
-      const blob = new Blob([JSON.stringify({ fingerprint: state.doc.fingerprint, position: pos, device })], { type: "application/json" });
-      navigator.sendBeacon(`${FOLIO_API_BASE}/progress`, blob);
+      // fetch with keepalive survives page unload AND supports auth headers
+      fetch(`${FOLIO_API_BASE}/progress`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${account.token}`,
+        },
+        body: JSON.stringify({ fingerprint: state.doc.fingerprint, position: pos, device }),
+        keepalive: true,
+      }).catch(() => queueSync(state.doc.fingerprint, pos, device));
     }
   }
 });
