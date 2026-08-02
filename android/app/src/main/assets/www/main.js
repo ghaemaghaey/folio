@@ -3326,7 +3326,7 @@ function bindEvents() {
 
   // Content tap: toggle chrome (single tap to show/hide)
   el.stage?.addEventListener("click", (e) => {
-    // Ignore clicks inside panels, popups, nav, links, images
+    // Ignore clicks inside panels, popups, nav, links, guide
     if (
       e.target.closest(".edge-nav") ||
       e.target.closest(".font-panel") ||
@@ -3335,8 +3335,7 @@ function bindEvents() {
       e.target.closest(".toc-panel") ||
       e.target.closest(".device-picker-overlay") ||
       e.target.closest(".reading-guide") ||
-      e.target.closest("a") ||
-      e.target.closest("img")
+      e.target.closest("a")
     )
       return;
     // If chrome is visible and a panel is open, close the panel but keep chrome

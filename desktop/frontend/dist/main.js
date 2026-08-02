@@ -3410,8 +3410,7 @@ function bindEvents() {
       e.target.closest(".guide-panel") ||
       e.target.closest(".toc-panel") ||
       e.target.closest(".reading-guide") ||
-      e.target.closest("a") ||
-      e.target.closest("img")
+      e.target.closest("a")
     )
       return;
     el.fontPanel.classList.add("is-hidden");
