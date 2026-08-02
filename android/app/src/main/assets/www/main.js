@@ -165,6 +165,14 @@ async function folioApi(path, { method = "GET", body, token, formData } = {}) {
 
 /** Detect device name for per-device progress tracking. */
 function getDeviceName() {
+  // Try to get real model from Kotlin bridge
+  if (typeof FolioAndroid !== "undefined" && FolioAndroid.getDeviceModel) {
+    try {
+      const model = FolioAndroid.getDeviceModel();
+      if (model) return model;
+    } catch (_) {}
+  }
+  // Fallback to random ID
   let id = localStorage.getItem("folio.deviceId");
   if (!id) {
     id = Math.random().toString(36).slice(2, 10);
@@ -178,14 +186,114 @@ function serializePosition(page, chapter, subPage, scroll) {
   return JSON.stringify({ p: page | 0, c: chapter | 0, s: subPage | 0, sc: scroll || 0 });
 }
 
+/** Serialize EPUB position with character offset for cross-device matching. */
+function serializeEpubPosition(chapter, charOffsetFraction, textFingerprint) {
+  return JSON.stringify({ c: chapter | 0, co: Math.round(charOffsetFraction * 1000) / 1000, fp: textFingerprint || "" });
+}
+
 /** Deserialize server position string back to numbers. Returns null on error. */
 function deserializePosition(posStr) {
   if (!posStr) return null;
   try {
     const o = JSON.parse(posStr);
-    if (o && typeof o.p === "number") return o;
+    if (o && (typeof o.p === "number" || typeof o.co === "number")) return o;
     return null;
   } catch { return null; }
+}
+
+/** Get the character offset fraction at the current scroll position in EPUB. */
+function getEpubCharOffset() {
+  const book = el.epubBook;
+  const content = el.epubContent;
+  if (!book || !content) return { co: 0, fp: "" };
+
+  // Find the element at the top of the viewport
+  const bookRect = book.getBoundingClientRect();
+  const topY = bookRect.top;
+
+  // Walk text nodes to find character offset
+  let charCount = 0;
+  let totalChars = 0;
+  let foundOffset = -1;
+  let foundText = "";
+
+  const walk = document.createTreeWalker(content, NodeFilter.SHOW_TEXT, null, false);
+  let node;
+  while ((node = walk.nextNode())) {
+    const text = node.textContent || "";
+    totalChars += text.length;
+
+    // Check if this node is at or past the viewport top
+    if (foundOffset < 0) {
+      const range = document.createRange();
+      range.selectNode(node);
+      const rect = range.getBoundingClientRect();
+      if (rect.bottom >= topY) {
+        // This node contains the viewport top position
+        // Estimate character offset within this node
+        const nodeHeight = rect.height || 1;
+        const viewportOffsetInNode = Math.max(0, topY - rect.top);
+        const charFraction = viewportOffsetInNode / nodeHeight;
+        const charInNode = Math.min(text.length, Math.floor(charFraction * text.length));
+        foundOffset = charCount + charInNode;
+        // Get 8 chars of text at this position for fingerprint
+        foundText = text.substring(charInNode, charInNode + 8).replace(/\s+/g, " ");
+      }
+    }
+    charCount += text.length;
+  }
+
+  if (totalChars === 0) return { co: 0, fp: "" };
+  const co = foundOffset >= 0 ? foundOffset / totalChars : 0;
+  return { co: Math.round(co * 1000) / 1000, fp: foundText };
+}
+
+/** Restore EPUB position from character offset fraction. */
+function restoreEpubFromCharOffset(chapter, co, fp) {
+  const content = el.epubContent;
+  if (!content) return;
+
+  // Get all text in the chapter
+  const sections = content.querySelectorAll(`.epub-chapter[data-chapter="${chapter}"]`);
+  if (!sections.length) return;
+  const section = sections[0];
+
+  // Count total characters in this chapter
+  let totalChars = 0;
+  const walk = document.createTreeWalker(section, NodeFilter.SHOW_TEXT, null, false);
+  let node;
+  while ((node = walk.nextNode())) {
+    totalChars += (node.textContent || "").length;
+  }
+  if (totalChars === 0) return;
+
+  // Find the target character offset
+  const targetChar = Math.floor(co * totalChars);
+
+  // Walk text nodes to find the element at that offset
+  let charCount = 0;
+  const walk2 = document.createTreeWalker(section, NodeFilter.SHOW_TEXT, null, false);
+  while ((node = walk2.nextNode())) {
+    const text = node.textContent || "";
+    if (charCount + text.length >= targetChar) {
+      // Found the node — scroll to it
+      let targetNode = node.parentElement;
+      // Walk up to find a block-level element
+      while (targetNode && targetNode !== section && !isBlockElement(targetNode)) {
+        targetNode = targetNode.parentElement;
+      }
+      if (targetNode) {
+        targetNode.scrollIntoView({ block: "start", behavior: "auto" });
+      }
+      return;
+    }
+    charCount += text.length;
+  }
+}
+
+function isBlockElement(el) {
+  const tag = el.tagName?.toLowerCase();
+  return ["p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "li", "blockquote", "pre", "section", "article", "article"].includes(tag);
 }
 
 // ── Offline sync queue ──────────────────────────────────────────────
@@ -751,8 +859,6 @@ async function flushProgress() {
     } else {
       await api().SaveProgress(page, chapter, sub, scroll);
     }
-    // Cloud sync (fire-and-forget, queued on failure)
-    syncProgressToServer(state.doc.fingerprint, page, chapter, sub, scroll);
   } catch (err) {
     console.error("SaveProgress failed", err);
   }
@@ -1443,22 +1549,44 @@ async function openBookId(id) {
         const sp = deserializePosition(d.position);
         return { device: d.device || "?", pos: sp, updated: d.updated_at || "" };
       }).filter((d) => d.pos);
-      const posKey = (d) => `${d.pos.p}:${d.pos.c || 0}:${d.pos.s || 0}`;
-      const unique = new Set(parsed.map(posKey));
-      if (parsed.length > 1 && unique.size > 1) {
-        const chosen = await showDevicePickerPopup(parsed, doc.title || "this book");
-        if (chosen && chosen.pos) {
-          savedPage = chosen.pos.p ?? savedPage;
-          savedChapter = chosen.pos.c ?? savedChapter;
-          savedSubPage = chosen.pos.s ?? savedSubPage;
-          savedScroll = chosen.pos.sc ?? savedScroll;
+
+      if (doc.format === "epub") {
+        // EPUB: use char offset for cross-device matching
+        const epubKey = (d) => `${d.pos.c || 0}:${d.pos.co || 0}`;
+        const unique = new Set(parsed.map(epubKey));
+        if (parsed.length > 1 && unique.size > 1) {
+          const chosen = await showDevicePickerPopup(parsed, doc.title || "this book");
+          if (chosen && chosen.pos) {
+            savedChapter = chosen.pos.c ?? savedChapter;
+            // Defer char offset restore to after EPUB loads
+            state.pendingCharOffset = chosen.pos.co;
+            state.pendingFingerprint = chosen.pos.fp;
+          }
+        } else if (parsed.length === 1) {
+          const sp = parsed[0].pos;
+          savedChapter = sp.c ?? savedChapter;
+          state.pendingCharOffset = sp.co;
+          state.pendingFingerprint = sp.fp;
         }
-      } else if (parsed.length === 1) {
-        const sp = parsed[0].pos;
-        savedPage = sp.p ?? savedPage;
-        savedChapter = sp.c ?? savedChapter;
-        savedSubPage = sp.s ?? savedSubPage;
-        savedScroll = sp.sc ?? savedScroll;
+      } else {
+        // PDF: use page number
+        const posKey = (d) => `${d.pos.p}:${d.pos.c || 0}:${d.pos.s || 0}`;
+        const unique = new Set(parsed.map(posKey));
+        if (parsed.length > 1 && unique.size > 1) {
+          const chosen = await showDevicePickerPopup(parsed, doc.title || "this book");
+          if (chosen && chosen.pos) {
+            savedPage = chosen.pos.p ?? savedPage;
+            savedChapter = chosen.pos.c ?? savedChapter;
+            savedSubPage = chosen.pos.s ?? savedSubPage;
+            savedScroll = chosen.pos.sc ?? savedScroll;
+          }
+        } else if (parsed.length === 1) {
+          const sp = parsed[0].pos;
+          savedPage = sp.p ?? savedPage;
+          savedChapter = sp.c ?? savedChapter;
+          savedSubPage = sp.s ?? savedSubPage;
+          savedScroll = sp.sc ?? savedScroll;
+        }
       }
     }
     doc.pageIndex = savedPage | 0;
@@ -2108,6 +2236,19 @@ async function loadEpubContinuous(opts = {}) {
 
       updateEpubPositionFromScroll();
       updateChromeMeta();
+
+      // Cross-device: restore from char offset if available
+      if (state.pendingCharOffset != null) {
+        const co = state.pendingCharOffset;
+        const ch = state.epubChapterIndex || 0;
+        delete state.pendingCharOffset;
+        delete state.pendingFingerprint;
+        // Wait a frame for layout to settle
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+        restoreEpubFromCharOffset(ch, co);
+        updateEpubPositionFromScroll();
+        updateChromeMeta();
+      }
     } finally {
       state.restoring = false;
     }
@@ -3594,17 +3735,15 @@ async function boot() {
 // Also queues to localStorage if offline.
 window.addEventListener("beforeunload", () => {
   if (state.doc && isLoggedIn() && state.doc.fingerprint) {
-    let page = 0, chapter = 0, sub = 0, scroll = 0;
+    let pos;
     if (state.doc.format === "epub") {
-      page = state.globalPage | 0;
-      chapter = state.epubChapterIndex | 0;
-      sub = state.epubPage | 0;
-      scroll = currentScrollRatio() || 0;
+      const { co, fp } = getEpubCharOffset();
+      pos = serializeEpubPosition(state.epubChapterIndex | 0, co, fp);
     } else {
-      page = Math.max(0, state.doc.pageIndex | 0);
-      scroll = state.mode === "scroll" ? currentScrollRatio() || 0 : 0;
+      const page = Math.max(0, state.doc.pageIndex | 0);
+      const scroll = state.mode === "scroll" ? currentScrollRatio() || 0 : 0;
+      pos = serializePosition(page, 0, 0, scroll);
     }
-    const pos = serializePosition(page, chapter, sub, scroll);
     const device = getDeviceName();
     if (!navigator.onLine) {
       queueSync(state.doc.fingerprint, pos, device);

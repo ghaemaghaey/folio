@@ -2334,7 +2334,7 @@ html {
 .toolbar-menu { display: none; }
 @media (max-width: 480px) {
   .toolbar-more { display: inline-flex; }
-  .lib-header .btn:not(.toolbar-more):not(.lib-tab) { display: none; }
+  .lib-header .btn:not(.toolbar-more):not(.lib-tab):not(#btn-account) { display: none; }
   .toolbar-menu.is-open { display: flex; flex-direction: column; position: absolute; top: 100%; right: var(--space-3); z-index: 100; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-md); padding: var(--space-2); gap: var(--space-1); min-width: 160px; }
   .toolbar-menu.is-open .btn { display: flex; width: 100%; justify-content: flex-start; }
 }

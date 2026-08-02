@@ -31,6 +31,11 @@ class FolioJsBridge(
     private val io = Executors.newFixedThreadPool(3)
 
     @JavascriptInterface
+    fun getDeviceModel(): String {
+        return "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}"
+    }
+
+    @JavascriptInterface
     fun invoke(method: String, argsJson: String, callbackId: String) {
         io.execute {
             try {
