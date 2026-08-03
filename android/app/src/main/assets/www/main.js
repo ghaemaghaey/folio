@@ -1567,37 +1567,23 @@ async function openBookId(id) {
     const devices = await fetchAllDeviceProgress(fp);
     const currentDevice = getDeviceName();
     const currentPlatform = normalizeDevicePlatform(currentDevice);
-    console.log("[picker] devices:", devices.length, "current:", currentDevice, "platform:", currentPlatform);
     if (devices.length > 0) {
       const parsed = devices.map((d) => {
         const sp = deserializePosition(d.position);
         return { device: d.device || "?", pos: sp, updated: d.updated_at || "" };
       }).filter((d) => d.pos);
-      console.log("[picker] parsed:", parsed.map((d) => d.device + "=" + JSON.stringify(d.pos)));
 
       if (doc.format === "epub") {
         // Filter to only cross-device positions (different platform)
         const crossDevice = parsed.filter((d) => normalizeDevicePlatform(d.device) !== currentPlatform);
-        console.log("[picker] crossDevice:", crossDevice.length, "devices:", crossDevice.map((d) => d.device));
         if (crossDevice.length > 0) {
-          // Compare by chapter + scroll ratio (char offset alone isn't enough —
-          // two devices at same chapter but different scroll positions should show picker)
-          const epubKey = (d) => `${d.pos.c || 0}:${d.pos.sc || 0}`;
-          const unique = new Set(crossDevice.map(epubKey));
-          if (crossDevice.length > 1 && unique.size > 1) {
-            const chosen = await showDevicePickerPopup(crossDevice, doc.title || "this book");
-            if (chosen && chosen.pos) {
-              savedChapter = chosen.pos.c ?? savedChapter;
-              savedScroll = 0;
-              state.pendingCharOffset = chosen.pos.co;
-              state.pendingFingerprint = chosen.pos.fp;
-            }
-          } else if (crossDevice.length === 1) {
-            const sp = crossDevice[0].pos;
-            savedChapter = sp.c ?? savedChapter;
+          // Always show picker when there are cross-device positions
+          const chosen = await showDevicePickerPopup(crossDevice, doc.title || "this book");
+          if (chosen && chosen.pos) {
+            savedChapter = chosen.pos.c ?? savedChapter;
             savedScroll = 0;
-            state.pendingCharOffset = sp.co;
-            state.pendingFingerprint = sp.fp;
+            state.pendingCharOffset = chosen.pos.co;
+            state.pendingFingerprint = chosen.pos.fp;
           }
         }
         // Same device: skip restore, local progress is already correct
@@ -1605,23 +1591,15 @@ async function openBookId(id) {
         // PDF: filter to cross-device positions
         const crossDevice = parsed.filter((d) => normalizeDevicePlatform(d.device) !== currentPlatform);
         if (crossDevice.length > 0) {
-          const posKey = (d) => `${d.pos.p}:${d.pos.c || 0}:${d.pos.s || 0}`;
-          const unique = new Set(crossDevice.map(posKey));
-          if (crossDevice.length > 1 && unique.size > 1) {
-            const chosen = await showDevicePickerPopup(crossDevice, doc.title || "this book");
-            if (chosen && chosen.pos) {
-              savedPage = chosen.pos.p ?? savedPage;
-              savedChapter = chosen.pos.c ?? savedChapter;
-              savedSubPage = chosen.pos.s ?? savedSubPage;
-              savedScroll = 0;
-            }
-          } else if (crossDevice.length === 1) {
-            const sp = crossDevice[0].pos;
-            savedPage = sp.p ?? savedPage;
-            savedChapter = sp.c ?? savedChapter;
-            savedSubPage = sp.s ?? savedSubPage;
+          // Always show picker when there are cross-device positions
+          const chosen = await showDevicePickerPopup(crossDevice, doc.title || "this book");
+          if (chosen && chosen.pos) {
+            savedPage = chosen.pos.p ?? savedPage;
+            savedChapter = chosen.pos.c ?? savedChapter;
+            savedSubPage = chosen.pos.s ?? savedSubPage;
             savedScroll = 0;
           }
+        }
         }
         // Same device: skip restore, local progress is already correct
       }
